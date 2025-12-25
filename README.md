@@ -41,7 +41,7 @@ python tracked_person_publisher.py --yolo-det yolo11n.engine --yolo-seg yolo11s-
 
 | Key | Action |
 |-----|--------|
-| `e` | Enroll the closest person as target |
+| `e` | Enroll the closest person as target (Nearest will auto enroll otherwise set --no-auto-enroll)|
 | `c` | Clear current target |
 | `s` | Print system status |
 | `q` | Quit |
