@@ -21,6 +21,18 @@ This project enables a robot to track and follow a specific person using a RealS
 
 ### Basic Usage
 
+### ROS 2 Integration
+
+```bash
+python tracked_person_publisher.py --yolo-det yolo11n.engine --yolo-seg yolo11s-seg.engine
+```
+In another terminal run
+```bash
+ros2 topic echo /tracked_person/pose
+```
+
+If ROS Jazzy not installed
+
 ```bash
 python main.py --yolo-det yolo11n.engine --yolo-seg yolo11s-seg.engine
 ```
@@ -31,11 +43,6 @@ python main.py --yolo-det yolo11n.engine --yolo-seg yolo11s-seg.engine
 python main.py --yolo-det yolo11n.engine --yolo-seg yolo11s-seg.engine --no-display
 ```
 
-### ROS 2 Integration
-
-```bash
-python tracked_person_publisher.py --yolo-det yolo11n.engine --yolo-seg yolo11s-seg.engine
-```
 
 ## Controls
 
