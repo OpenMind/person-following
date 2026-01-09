@@ -107,14 +107,14 @@ def parse_args():
     )
 
     # ROS camera topic configuration
-    p.add_argument("--color-topic", type=str, default="/camera/color/image_raw", help="ROS color image topic")
+    p.add_argument("--color-topic", type=str, default="/camera/camera/color/image_raw", help="ROS color image topic")
     p.add_argument(
         "--depth-topic",
         type=str,
-        default="/camera/aligned_depth_to_color/image_raw",
+        default="/camera/camera/aligned_depth_to_color/image_raw",
         help="ROS depth image topic (aligned depth)",
     )
-    p.add_argument("--camera-info-topic", type=str, default="/camera/color/camera_info", help="ROS camera info topic")
+    p.add_argument("--camera-info-topic", type=str, default="/camera/camera/color/camera_info", help="ROS camera info topic")
     p.add_argument("--depth-scale", type=float, default=0.001, help="Depth scale (uint16 to meters), default 0.001")
 
     # Display and output
