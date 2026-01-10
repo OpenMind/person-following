@@ -251,7 +251,7 @@ ros2 topic echo /tracked_person/status
 ```
 
 
-##### Keyboard on camera preview 
+##### Keyboard on camera preview
 | Key | Action |
 |-----|--------|
 | `e` | Enroll the closest person as target (Nearest will auto enroll otherwise set --no-auto-enroll)|
@@ -334,6 +334,3 @@ ros2 topic echo /tracked_person/status
 - [OpenCLIP](https://github.com/mlfoundations/open_clip) - Vision-language embeddings
 - [Intel RealSense](https://github.com/IntelRealSense/librealsense) - Depth camera SDK
 - [ROS 2](https://docs.ros.org/en/jazzy/) - Robot Operating System
-
-
-

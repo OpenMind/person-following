@@ -1,5 +1,5 @@
 """
-Target State Management - OpenCLIP Version
+Target State Management - OpenCLIP Version.
 
 Stores clothing features and OpenCLIP embeddings for person re-identification.
 """
@@ -59,43 +59,43 @@ class TargetState:
     time_lost_start : float or None
         Timestamp when target was first lost.
     """
-    
+
     # === Core Parameters ===
     WALKING_SPEED_THRESHOLD = 0.4  # m/s
     TIME_WINDOW = 0.167  # seconds
     DISTANCE_THRESHOLD = WALKING_SPEED_THRESHOLD * TIME_WINDOW
-    
+
     # Feature storage - 0.5m spacing
     BUCKET_SPACING = 0.5  # meters
-    
+
     # Quality thresholds
     MIN_MASK_COVERAGE = 35.0
     MIN_MASK_COVERAGE_FOR_MATCH = 30.0
-    
+
     # Frame margin
     FRAME_MARGIN_LR = 20  # pixels
-    
+
     # === State Variables ===
     track_id: Optional[int] = None
     base_distance: float = 0.0
-    
+
     distance_history: Deque[Tuple[float, float]] = field(
         default_factory=lambda: deque(maxlen=10)
     )
-    
+
     # Features: {bucket: {direction: {'clothing': dict, 'clip': array, 'mask_coverage': float}}}
     features: Dict[float, Dict[str, Optional[dict]]] = field(default_factory=dict)
-    
+
     last_saved_distance: float = 0.0
     last_saved_direction: Optional[str] = None
     last_saved_timestamp: float = 0.0
-    
+
     status: str = "INACTIVE"
     frames_tracked: int = 0
     frames_lost: int = 0
     time_lost_start: Optional[float] = None
     feature_extraction_failures: int = 0
-    
+
     def initialize(self, track_id: int, distance: float, timestamp: float):
         """
         Initialize target state at enrollment.
@@ -119,10 +119,10 @@ class TargetState:
         self.last_saved_timestamp = timestamp
         self.feature_extraction_failures = 0
         self.features = {}
-        
+
         bucket = self._get_bucket(distance)
-        self.features[bucket] = {'approaching': None, 'leaving': None}
-    
+        self.features[bucket] = {"approaching": None, "leaving": None}
+
     def _get_bucket(self, distance: float) -> float:
         """
         Get bucket distance for a given distance.
@@ -143,7 +143,7 @@ class TargetState:
         offset = distance - self.base_distance
         bucket_index = round(offset / self.BUCKET_SPACING)
         return self.base_distance + bucket_index * self.BUCKET_SPACING
-    
+
     def _get_closest_bucket(self, target_distance: float) -> Optional[float]:
         """
         Find the closest bucket that has features.
@@ -163,21 +163,24 @@ class TargetState:
         """
         if not self.features:
             return None
-        
+
         valid_buckets = []
         for bucket, directions in self.features.items():
             if any(d is not None for d in directions.values()):
                 valid_buckets.append(bucket)
-        
+
         if not valid_buckets:
             return None
-        
+
         closest = min(valid_buckets, key=lambda b: abs(b - target_distance))
         return closest
-    
+
     def is_within_frame_margin(
-        self, bbox: Tuple[int, int, int, int], frame_width: int, frame_height: int,
-        margin_lr: int = None
+        self,
+        bbox: Tuple[int, int, int, int],
+        frame_width: int,
+        frame_height: int,
+        margin_lr: int = None,
     ) -> Tuple[bool, str]:
         """
         Check if bounding box is within valid frame margins.
@@ -205,13 +208,13 @@ class TargetState:
         """
         x1, y1, x2, y2 = bbox
         margin = margin_lr if margin_lr is not None else self.FRAME_MARGIN_LR
-        
+
         if x1 < margin:
             return False, "left_edge_cut"
         if x2 > (frame_width - margin):
             return False, "right_edge_cut"
         return True, "within_margin"
-    
+
     def detect_movement_direction(
         self, current_distance: float, current_timestamp: float
     ) -> Optional[str]:
@@ -235,35 +238,41 @@ class TargetState:
             movement is below threshold or insufficient data.
         """
         self.distance_history.append((current_timestamp, current_distance))
-        
+
         if len(self.distance_history) < 2:
             return None
-        
+
         cutoff_time = current_timestamp - self.TIME_WINDOW
-        recent_samples = [(ts, dist) for ts, dist in self.distance_history if ts >= cutoff_time]
-        
+        recent_samples = [
+            (ts, dist) for ts, dist in self.distance_history if ts >= cutoff_time
+        ]
+
         if len(recent_samples) < 2:
             return None
-        
+
         oldest_ts, oldest_dist = recent_samples[0]
         newest_ts, newest_dist = recent_samples[-1]
-        
+
         time_elapsed = newest_ts - oldest_ts
         if time_elapsed < 0.05:
             return None
-        
+
         dist_change = newest_dist - oldest_dist
         speed = abs(dist_change) / time_elapsed
-        
+
         if speed < self.WALKING_SPEED_THRESHOLD:
             return None
-        
-        return 'leaving' if dist_change > 0 else 'approaching'
-    
+
+        return "leaving" if dist_change > 0 else "approaching"
+
     def should_save_feature(
-        self, current_distance: float, current_direction: Optional[str],
-        current_timestamp: float, bbox: Tuple[int, int, int, int],
-        frame_width: int, frame_height: int
+        self,
+        current_distance: float,
+        current_direction: Optional[str],
+        current_timestamp: float,
+        bbox: Tuple[int, int, int, int],
+        frame_width: int,
+        frame_height: int,
     ) -> Tuple[bool, float, str]:
         """
         Determine if a feature should be saved.
@@ -297,26 +306,26 @@ class TargetState:
             Movement direction for the feature.
         """
         if current_direction is None:
-            return False, 0.0, ''
-        
+            return False, 0.0, ""
+
         is_valid, _ = self.is_within_frame_margin(bbox, frame_width, frame_height)
         if not is_valid:
-            return False, 0.0, ''
-        
+            return False, 0.0, ""
+
         bucket = self._get_bucket(current_distance)
-        
+
         if bucket not in self.features:
-            self.features[bucket] = {'approaching': None, 'leaving': None}
-        
+            self.features[bucket] = {"approaching": None, "leaving": None}
+
         if self.features[bucket][current_direction] is not None:
             return False, bucket, current_direction
-        
+
         time_since_save = current_timestamp - self.last_saved_timestamp
         if time_since_save < 0.3:
             return False, bucket, current_direction
-        
+
         return True, bucket, current_direction
-    
+
     def save_feature(
         self,
         bucket_distance: float,
@@ -324,7 +333,7 @@ class TargetState:
         clothing_feature: dict,
         clip_embedding: np.ndarray,
         mask_coverage: float,
-        timestamp: float
+        timestamp: float,
     ) -> bool:
         """
         Save feature with quality check.
@@ -353,24 +362,26 @@ class TargetState:
             True if feature was saved successfully, False if rejected.
         """
         if mask_coverage < self.MIN_MASK_COVERAGE:
-            logger.warning(f"Feature rejected: mask {mask_coverage:.1f}% < {self.MIN_MASK_COVERAGE}%")
+            logger.warning(
+                f"Feature rejected: mask {mask_coverage:.1f}% < {self.MIN_MASK_COVERAGE}%"
+            )
             return False
-        
+
         if bucket_distance not in self.features:
-            self.features[bucket_distance] = {'approaching': None, 'leaving': None}
-        
+            self.features[bucket_distance] = {"approaching": None, "leaving": None}
+
         if self.features[bucket_distance][direction] is None:
             self.features[bucket_distance][direction] = {
-                'clothing': clothing_feature,
-                'clip': clip_embedding,
-                'mask_coverage': mask_coverage
+                "clothing": clothing_feature,
+                "clip": clip_embedding,
+                "mask_coverage": mask_coverage,
             }
             self.last_saved_timestamp = timestamp
             self.feature_extraction_failures = 0
             return True
-        
+
         return False
-    
+
     def get_closest_bucket_features(
         self, query_distance: float
     ) -> Tuple[Optional[dict], Optional[np.ndarray], float, float]:
@@ -397,35 +408,33 @@ class TargetState:
             Distance of the bucket the features came from.
         """
         closest_bucket = self._get_closest_bucket(query_distance)
-        
+
         if closest_bucket is None:
             return None, None, 0.0, 0.0
-        
+
         directions = self.features.get(closest_bucket, {})
-        
+
         best_data = None
         best_coverage = 0.0
-        
+
         for direction, data in directions.items():
             if data is not None:
-                coverage = data.get('mask_coverage', 0.0)
+                coverage = data.get("mask_coverage", 0.0)
                 if coverage > best_coverage:
                     best_coverage = coverage
                     best_data = data
-        
+
         if best_data is None:
             return None, None, 0.0, closest_bucket
-        
+
         return (
-            best_data.get('clothing'),
-            best_data.get('clip'),
+            best_data.get("clothing"),
+            best_data.get("clip"),
             best_coverage,
-            closest_bucket
+            closest_bucket,
         )
-    
-    def get_bucket_features_both_directions(
-        self, query_distance: float
-    ) -> List[dict]:
+
+    def get_bucket_features_both_directions(self, query_distance: float) -> List[dict]:
         """
         Get all features from the closest bucket for both directions.
 
@@ -453,25 +462,30 @@ class TargetState:
                 Bucket distance in meters.
         """
         closest_bucket = self._get_closest_bucket(query_distance)
-        
+
         if closest_bucket is None:
             return []
-        
+
         directions = self.features.get(closest_bucket, {})
         result = []
-        
+
         for direction, data in directions.items():
-            if data is not None and data.get('mask_coverage', 0) >= self.MIN_MASK_COVERAGE_FOR_MATCH:
-                result.append({
-                    'clothing': data.get('clothing'),
-                    'clip': data.get('clip'),
-                    'mask_coverage': data.get('mask_coverage', 0),
-                    'direction': direction,
-                    'bucket': closest_bucket
-                })
-        
+            if (
+                data is not None
+                and data.get("mask_coverage", 0) >= self.MIN_MASK_COVERAGE_FOR_MATCH
+            ):
+                result.append(
+                    {
+                        "clothing": data.get("clothing"),
+                        "clip": data.get("clip"),
+                        "mask_coverage": data.get("mask_coverage", 0),
+                        "direction": direction,
+                        "bucket": closest_bucket,
+                    }
+                )
+
         return result
-    
+
     def get_all_features_flat(self) -> List[dict]:
         """
         Get all features as a flat list.
@@ -498,15 +512,17 @@ class TargetState:
         for bucket, directions in self.features.items():
             for direction, data in directions.items():
                 if data is not None:
-                    result.append({
-                        'bucket': bucket,
-                        'direction': direction,
-                        'mask_coverage': data.get('mask_coverage', 0),
-                        'has_clothing': data.get('clothing') is not None,
-                        'has_clip': data.get('clip') is not None
-                    })
+                    result.append(
+                        {
+                            "bucket": bucket,
+                            "direction": direction,
+                            "mask_coverage": data.get("mask_coverage", 0),
+                            "has_clothing": data.get("clothing") is not None,
+                            "has_clip": data.get("clip") is not None,
+                        }
+                    )
         return result
-    
+
     def mark_lost(self, current_timestamp: float):
         """
         Mark target as lost and transition to search mode.
@@ -523,7 +539,7 @@ class TargetState:
         self.status = "SEARCHING"
         if self.time_lost_start is None:
             self.time_lost_start = current_timestamp
-    
+
     def resume_tracking(self, new_track_id: int):
         """
         Resume tracking with a new track ID.
@@ -541,7 +557,7 @@ class TargetState:
         self.frames_lost = 0
         self.time_lost_start = None
         self.feature_extraction_failures = 0
-    
+
     def get_total_features(self) -> int:
         """
         Get total number of stored features.
@@ -552,10 +568,12 @@ class TargetState:
             Total count of features across all buckets and directions.
         """
         return sum(
-            1 for dirs in self.features.values()
-            for data in dirs.values() if data is not None
+            1
+            for dirs in self.features.values()
+            for data in dirs.values()
+            if data is not None
         )
-    
+
     def get_time_lost(self, current_timestamp: float) -> float:
         """
         Get duration since target was lost.
@@ -573,7 +591,7 @@ class TargetState:
         if self.time_lost_start is None:
             return 0.0
         return current_timestamp - self.time_lost_start
-    
+
     def get_quality_summary(self) -> str:
         """
         Get summary string of stored features.
@@ -587,16 +605,20 @@ class TargetState:
         features = self.get_all_features_flat()
         if not features:
             return "No features"
-        
-        coverages = [f['mask_coverage'] for f in features]
-        buckets = sorted(set(f['bucket'] for f in features))
-        
-        bucket_str = f"{min(buckets):.1f}-{max(buckets):.1f}m" if len(buckets) > 1 else f"{buckets[0]:.1f}m"
-        
-        clip_count = sum(1 for f in features if f.get('has_clip'))
-        
+
+        coverages = [f["mask_coverage"] for f in features]
+        buckets = sorted(set(f["bucket"] for f in features))
+
+        bucket_str = (
+            f"{min(buckets):.1f}-{max(buckets):.1f}m"
+            if len(buckets) > 1
+            else f"{buckets[0]:.1f}m"
+        )
+
+        clip_count = sum(1 for f in features if f.get("has_clip"))
+
         return f"F:{len(features)} CLIP:{clip_count} @{bucket_str} M:{min(coverages):.0f}-{max(coverages):.0f}%"
-    
+
     def get_buckets_info(self) -> str:
         """
         Get detailed information about all feature buckets.
@@ -611,10 +633,10 @@ class TargetState:
         for bucket in sorted(self.features.keys()):
             dirs = self.features[bucket]
             parts = []
-            for d in ['approaching', 'leaving']:
+            for d in ["approaching", "leaving"]:
                 if dirs.get(d) is not None:
-                    cov = dirs[d].get('mask_coverage', 0)
-                    has_clip = "Y" if dirs[d].get('clip') is not None else "N"
+                    cov = dirs[d].get("mask_coverage", 0)
+                    has_clip = "Y" if dirs[d].get("clip") is not None else "N"
                     parts.append(f"{d[0].upper()}:{cov:.0f}%{has_clip}")
             if parts:
                 lines.append(f"  {bucket:.1f}m: {', '.join(parts)}")

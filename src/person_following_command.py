@@ -1,7 +1,5 @@
 #!/usr/bin/env python3
 """
-person_following_command.py
-
 A tiny, dependency-free HTTP control API for the person-following system.
 
 Runs an HTTP server (in a background thread) inside the same process as
@@ -36,6 +34,8 @@ CommandName = Literal["enroll", "clear", "quit", "status"]
 
 @dataclass(frozen=True)
 class Command:
+    """Command dataclass for control operations."""
+
     name: CommandName
     ts: float = field(default_factory=time.time)
 
@@ -48,10 +48,12 @@ class SharedStatus:
         self._data: Dict[str, Any] = {"ok": True, "ts": time.time()}
 
     def set(self, data: Dict[str, Any]) -> None:
+        """Update the status data."""
         with self._lock:
             self._data = dict(data)
 
     def get(self) -> Dict[str, Any]:
+        """Get a copy of the status data."""
         with self._lock:
             return dict(self._data)
 
@@ -130,15 +132,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(400, {"ok": False, "error": "invalid_cmd", "cmd": cmd})
             return
 
-        # status: return immediately (no need to enqueue)
         if cmd == "status":
             self._send_json(200, self.server.shared_status.get())
             return
 
         try:
-            self.server.cmd_queue.put_nowait(Command(name=cmd))  # type: ignore[arg-type]
+            self.server.cmd_queue.put_nowait(Command(name=cmd))
         except Exception as e:
-            self._send_json(500, {"ok": False, "error": "queue_error", "detail": str(e)})
+            self._send_json(
+                500, {"ok": False, "error": "queue_error", "detail": str(e)}
+            )
             return
 
         self._send_json(200, {"ok": True, "queued": cmd})
@@ -164,9 +167,11 @@ class CommandServer:
 
     @property
     def url(self) -> str:
+        """Get the server URL."""
         return f"http://{self._host}:{self._port}"
 
     def start(self) -> None:
+        """Start the HTTP server in a background thread."""
         if self._httpd is not None:
             return
 
@@ -180,6 +185,7 @@ class CommandServer:
         self._thread.start()
 
     def stop(self) -> None:
+        """Stop the HTTP server."""
         if self._httpd is None:
             return
         self._httpd.shutdown()

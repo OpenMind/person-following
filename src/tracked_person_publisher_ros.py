@@ -43,18 +43,16 @@ import time
 from typing import Optional, Tuple
 
 import cv2
+import message_filters
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from rclpy.node import Node
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import Image, CameraInfo
+from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
-import message_filters
 
 from person_following_command import Command, CommandServer, SharedStatus
-
-
 
 # Logging
 logging.basicConfig(
@@ -83,7 +81,9 @@ def parse_args():
     )
 
     # OpenCLIP settings
-    p.add_argument("--clip-model", type=str, default="ViT-B-16", help="OpenCLIP model name")
+    p.add_argument(
+        "--clip-model", type=str, default="ViT-B-16", help="OpenCLIP model name"
+    )
     p.add_argument(
         "--clip-pretrained",
         type=str,
@@ -92,10 +92,30 @@ def parse_args():
     )
 
     # Thresholds
-    p.add_argument("--clothing-threshold", type=float, default=0.8, help="Lab clothing similarity threshold")
-    p.add_argument("--clip-threshold", type=float, default=0.8, help="OpenCLIP similarity threshold")
-    p.add_argument("--min-mask-coverage", type=float, default=35.0, help="Minimum mask coverage percentage")
-    p.add_argument("--search-interval", type=float, default=0.33, help="Search mode feature extraction interval (seconds)")
+    p.add_argument(
+        "--clothing-threshold",
+        type=float,
+        default=0.8,
+        help="Lab clothing similarity threshold",
+    )
+    p.add_argument(
+        "--clip-threshold",
+        type=float,
+        default=0.8,
+        help="OpenCLIP similarity threshold",
+    )
+    p.add_argument(
+        "--min-mask-coverage",
+        type=float,
+        default=35.0,
+        help="Minimum mask coverage percentage",
+    )
+    p.add_argument(
+        "--search-interval",
+        type=float,
+        default=0.33,
+        help="Search mode feature extraction interval (seconds)",
+    )
 
     # Tracker
     p.add_argument(
@@ -107,30 +127,74 @@ def parse_args():
     )
 
     # ROS camera topic configuration
-    p.add_argument("--color-topic", type=str, default="/camera/camera/color/image_raw", help="ROS color image topic")
+    p.add_argument(
+        "--color-topic",
+        type=str,
+        default="/camera/camera/color/image_raw",
+        help="ROS color image topic",
+    )
     p.add_argument(
         "--depth-topic",
         type=str,
         default="/camera/camera/aligned_depth_to_color/image_raw",
         help="ROS depth image topic (aligned depth)",
     )
-    p.add_argument("--camera-info-topic", type=str, default="/camera/camera/color/camera_info", help="ROS camera info topic")
-    p.add_argument("--depth-scale", type=float, default=0.001, help="Depth scale (uint16 to meters), default 0.001")
+    p.add_argument(
+        "--camera-info-topic",
+        type=str,
+        default="/camera/camera/color/camera_info",
+        help="ROS camera info topic",
+    )
+    p.add_argument(
+        "--depth-scale",
+        type=float,
+        default=0.001,
+        help="Depth scale (uint16 to meters), default 0.001",
+    )
 
     # Display and output
-    p.add_argument("--display", action="store_true", default=False, help="Enable visualization window")
-    p.add_argument("--save-video", type=str, default=None, help="Save output to video file")
-    p.add_argument("--publish-hz", type=float, default=15.0, help="ROS 2 publish rate (Hz)")
+    p.add_argument(
+        "--display",
+        action="store_true",
+        default=False,
+        help="Enable visualization window",
+    )
+    p.add_argument(
+        "--save-video", type=str, default=None, help="Save output to video file"
+    )
+    p.add_argument(
+        "--publish-hz", type=float, default=15.0, help="ROS 2 publish rate (Hz)"
+    )
 
     # Enrollment behavior (default OFF; enroll via endpoint or keypress)
     g = p.add_mutually_exclusive_group()
-    g.add_argument("--auto-enroll", action="store_true", default=False, help="Enable auto-enrollment (previous default)")
-    g.add_argument("--no-auto-enroll", action="store_true", help="Disable auto-enrollment (deprecated; default already OFF)")
+    g.add_argument(
+        "--auto-enroll",
+        action="store_true",
+        default=False,
+        help="Enable auto-enrollment (previous default)",
+    )
+    g.add_argument(
+        "--no-auto-enroll",
+        action="store_true",
+        help="Disable auto-enrollment (deprecated; default already OFF)",
+    )
 
     # Control API
-    p.add_argument("--cmd-host", type=str, default="127.0.0.1", help="Command API bind host (default: 127.0.0.1)")
-    p.add_argument("--cmd-port", type=int, default=8080, help="Command API port (default: 8080)")
-    p.add_argument("--no-command-server", action="store_true", help="Disable the HTTP command server")
+    p.add_argument(
+        "--cmd-host",
+        type=str,
+        default="127.0.0.1",
+        help="Command API bind host (default: 127.0.0.1)",
+    )
+    p.add_argument(
+        "--cmd-port", type=int, default=8080, help="Command API port (default: 8080)"
+    )
+    p.add_argument(
+        "--no-command-server",
+        action="store_true",
+        help="Disable the HTTP command server",
+    )
 
     return p.parse_args()
 
@@ -178,11 +242,17 @@ class RealSenseROSCamera:
         )
 
         # Subscribe to camera info for intrinsics
-        self._info_sub = node.create_subscription(CameraInfo, camera_info_topic, self._camera_info_callback, qos)
+        self._info_sub = node.create_subscription(
+            CameraInfo, camera_info_topic, self._camera_info_callback, qos
+        )
 
         # Synchronized subscribers for color and depth
-        self._color_sub = message_filters.Subscriber(node, Image, color_topic, qos_profile=qos)
-        self._depth_sub = message_filters.Subscriber(node, Image, depth_topic, qos_profile=qos)
+        self._color_sub = message_filters.Subscriber(
+            node, Image, color_topic, qos_profile=qos
+        )
+        self._depth_sub = message_filters.Subscriber(
+            node, Image, depth_topic, qos_profile=qos
+        )
 
         # ApproximateTimeSynchronizer matches frames by timestamp
         self._sync = message_filters.ApproximateTimeSynchronizer(
@@ -293,7 +363,9 @@ class TrackedPersonPublisher(Node):
     def publish_status(self, is_tracked: bool, x: float, z: float):
         """Publish tracking status as JSON."""
         msg = String()
-        msg.data = json.dumps({"is_tracked": is_tracked, "x": round(x, 3), "z": round(z, 3)})
+        msg.data = json.dumps(
+            {"is_tracked": is_tracked, "x": round(x, 3), "z": round(z, 3)}
+        )
         self.publisher.publish(msg)
         self.publish_count += 1
 
@@ -307,7 +379,9 @@ def compute_lateral_offset(bbox, distance: float, fx: float, cx: float) -> float
     return (pixel_offset * distance) / fx
 
 
-def draw_visualization(frame, result, system, is_tracked, x_offset, distance, publish_count, cmd_url: str):
+def draw_visualization(
+    frame, result, system, is_tracked, x_offset, distance, publish_count, cmd_url: str
+):
     """Draw tracking visualization on frame."""
     display = frame.copy()
     H, W = display.shape[:2]
@@ -326,7 +400,15 @@ def draw_visualization(frame, result, system, is_tracked, x_offset, distance, pu
             thickness = 1
 
         cv2.rectangle(display, (x1, y1), (x2, y2), color, thickness)
-        cv2.putText(display, f"ID:{track_id}", (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+        cv2.putText(
+            display,
+            f"ID:{track_id}",
+            (x1, y1 - 5),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            color,
+            1,
+        )
 
     # Draw target with distance
     if result.get("target_found") and "bbox" in result:
@@ -334,7 +416,9 @@ def draw_visualization(frame, result, system, is_tracked, x_offset, distance, pu
         cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 0), 3)
 
         label = f"TARGET @{distance:.2f}m (x:{x_offset:+.2f}m)"
-        cv2.putText(display, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+        cv2.putText(
+            display, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2
+        )
 
         cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
         cv2.line(display, (cx - 20, cy), (cx + 20, cy), (0, 0, 255), 2)
@@ -357,31 +441,79 @@ def draw_visualization(frame, result, system, is_tracked, x_offset, distance, pu
     status = result.get("status", "UNKNOWN")
     fps = result.get("fps", 0)
 
-    status_color = {"TRACKING_ACTIVE": (0, 255, 0), "SEARCHING": (0, 165, 255), "INACTIVE": (128, 128, 128)}.get(
-        status, (255, 255, 255)
-    )
+    status_color = {
+        "TRACKING_ACTIVE": (0, 255, 0),
+        "SEARCHING": (0, 165, 255),
+        "INACTIVE": (128, 128, 128),
+    }.get(status, (255, 255, 255))
     tracked_color = (0, 255, 0) if is_tracked else (0, 0, 255)
 
     cv2.rectangle(display, (0, 0), (W, 35), (0, 0, 0), -1)
-    cv2.putText(display, f"Status: {status}", (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_color, 2)
-    cv2.putText(display, f"Tracked: {'YES' if is_tracked else 'NO'}", (220, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, tracked_color, 1)
-    cv2.putText(display, f"FPS:{fps:.0f} Pub:{publish_count}", (W - 150, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    cv2.putText(
+        display,
+        f"Status: {status}",
+        (10, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.6,
+        status_color,
+        2,
+    )
+    cv2.putText(
+        display,
+        f"Tracked: {'YES' if is_tracked else 'NO'}",
+        (220, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        tracked_color,
+        1,
+    )
+    cv2.putText(
+        display,
+        f"FPS:{fps:.0f} Pub:{publish_count}",
+        (W - 150, 25),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (200, 200, 200),
+        1,
+    )
 
     cv2.rectangle(display, (0, H - 50), (W, H), (0, 0, 0), -1)
-    cv2.putText(display, "'e'=enroll | 'c'=clear | 's'=status | 'q'=quit", (10, H - 28),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-    cv2.putText(display, f"HTTP: {cmd_url}  (POST /command)", (10, H - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.45, (200, 200, 200), 1)
+    cv2.putText(
+        display,
+        "'e'=enroll | 'c'=clear | 's'=status | 'q'=quit",
+        (10, H - 28),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (200, 200, 200),
+        1,
+    )
+    cv2.putText(
+        display,
+        f"HTTP: {cmd_url}  (POST /command)",
+        (10, H - 8),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (200, 200, 200),
+        1,
+    )
 
     if status == "SEARCHING":
         time_lost = result.get("time_lost", 0)
-        cv2.putText(display, f"SEARCHING... ({time_lost:.1f}s)", (W // 2 - 80, H // 2),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 165, 255), 2)
+        cv2.putText(
+            display,
+            f"SEARCHING... ({time_lost:.1f}s)",
+            (W // 2 - 80, H // 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 165, 255),
+            2,
+        )
 
     return display
 
 
 def main() -> None:
+    """Main entry point for the ROS 2 tracked person publisher."""
     args = parse_args()
 
     logger.info("=" * 60)
@@ -428,7 +560,9 @@ def main() -> None:
     video_writer = None
     if args.save_video:
         fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        video_writer = cv2.VideoWriter(args.save_video, fourcc, 15, (camera.width, camera.height))
+        video_writer = cv2.VideoWriter(
+            args.save_video, fourcc, 15, (camera.width, camera.height)
+        )
         logger.info(f"Saving video to: {args.save_video}")
 
     auto_enroll = bool(args.auto_enroll) and not bool(args.no_auto_enroll)
@@ -442,7 +576,9 @@ def main() -> None:
     cmd_url = "(disabled)"
 
     if not args.no_command_server:
-        cmd_server = CommandServer(args.cmd_host, args.cmd_port, cmd_queue, shared_status)
+        cmd_server = CommandServer(
+            args.cmd_host, args.cmd_port, cmd_queue, shared_status
+        )
         cmd_server.start()
         cmd_url = cmd_server.url
         logger.info(f"Command API listening at: {cmd_url}")
@@ -460,7 +596,9 @@ def main() -> None:
     last_action = {"name": None, "ok": None, "detail": None, "ts": None}
 
     logger.info("=" * 60)
-    logger.info(f"Auto-enroll: {'ON' if auto_enroll else 'OFF'} (use --auto-enroll to enable)")
+    logger.info(
+        f"Auto-enroll: {'ON' if auto_enroll else 'OFF'} (use --auto-enroll to enable)"
+    )
     logger.info(f"Publish rate: {args.publish_hz} Hz")
     logger.info("Controls: 'e'=enroll, 'c'=clear, 's'=status, 'q'=quit")
     logger.info(f"HTTP commands: {cmd_url}")
@@ -475,23 +613,43 @@ def main() -> None:
                 return
 
             if cmd.name == "quit":
-                last_action = {"name": "quit", "ok": True, "detail": "queued", "ts": cmd.ts}
+                last_action = {
+                    "name": "quit",
+                    "ok": True,
+                    "detail": "queued",
+                    "ts": cmd.ts,
+                }
                 stop_event.set()
                 return
 
             if cmd.name == "clear":
                 try:
                     system.clear_target()
-                    last_action = {"name": "clear", "ok": True, "detail": None, "ts": cmd.ts}
+                    last_action = {
+                        "name": "clear",
+                        "ok": True,
+                        "detail": None,
+                        "ts": cmd.ts,
+                    }
                     logger.info("Target cleared (HTTP)")
                 except Exception as e:
-                    last_action = {"name": "clear", "ok": False, "detail": str(e), "ts": cmd.ts}
+                    last_action = {
+                        "name": "clear",
+                        "ok": False,
+                        "detail": str(e),
+                        "ts": cmd.ts,
+                    }
                     logger.warning(f"Clear failed (HTTP): {e}")
                 continue
 
             if cmd.name == "enroll":
                 pending_enroll = True
-                last_action = {"name": "enroll", "ok": None, "detail": "pending", "ts": cmd.ts}
+                last_action = {
+                    "name": "enroll",
+                    "ok": None,
+                    "detail": "pending",
+                    "ts": cmd.ts,
+                }
                 logger.info("Enroll requested (HTTP)")
                 continue
 
@@ -509,13 +667,23 @@ def main() -> None:
                 pending_enroll = False
                 try:
                     ok = bool(system.enroll_target(color_frame, depth_frame))
-                    last_action = {"name": "enroll", "ok": ok, "detail": None, "ts": time.time()}
+                    last_action = {
+                        "name": "enroll",
+                        "ok": ok,
+                        "detail": None,
+                        "ts": time.time(),
+                    }
                     if ok:
                         logger.info("Enrolled target (HTTP/keyboard)")
                     else:
                         logger.warning("Enrollment failed (HTTP/keyboard)")
                 except Exception as e:
-                    last_action = {"name": "enroll", "ok": False, "detail": str(e), "ts": time.time()}
+                    last_action = {
+                        "name": "enroll",
+                        "ok": False,
+                        "detail": str(e),
+                        "ts": time.time(),
+                    }
                     logger.warning(f"Enrollment failed: {e}")
 
             result = system.process_frame(color_frame, depth_frame)
@@ -531,7 +699,11 @@ def main() -> None:
             if is_tracked:
                 distance = float(result["distance"])
                 if np.isfinite(distance) and distance > 0.1:
-                    x_offset = float(compute_lateral_offset(result["bbox"], distance, camera.fx, camera.cx))
+                    x_offset = float(
+                        compute_lateral_offset(
+                            result["bbox"], distance, camera.fx, camera.cx
+                        )
+                    )
                 else:
                     is_tracked = False
 
@@ -569,7 +741,14 @@ def main() -> None:
 
             if args.display:
                 display = draw_visualization(
-                    color_frame, result, system, is_tracked, x_offset, distance, ros_node.publish_count, cmd_url
+                    color_frame,
+                    result,
+                    system,
+                    is_tracked,
+                    x_offset,
+                    distance,
+                    ros_node.publish_count,
+                    cmd_url,
                 )
                 cv2.imshow("Person Following - ROS 2", display)
                 if video_writer:
@@ -578,12 +757,22 @@ def main() -> None:
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     stop_event.set()
-                    last_action = {"name": "quit", "ok": True, "detail": "keyboard", "ts": time.time()}
+                    last_action = {
+                        "name": "quit",
+                        "ok": True,
+                        "detail": "keyboard",
+                        "ts": time.time(),
+                    }
                 elif key == ord("e"):
                     pending_enroll = True
                 elif key == ord("c"):
                     system.clear_target()
-                    last_action = {"name": "clear", "ok": True, "detail": "keyboard", "ts": time.time()}
+                    last_action = {
+                        "name": "clear",
+                        "ok": True,
+                        "detail": "keyboard",
+                        "ts": time.time(),
+                    }
                 elif key == ord("s"):
                     status_dict = system.get_status()
                     logger.info("=" * 40)

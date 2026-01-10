@@ -18,7 +18,7 @@ import tensorrt as trt
 logger = logging.getLogger(__name__)
 
 
-def nms_boxes(boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> List[int]:
+def nms_boxes(boxes: np.ndarray, scores: np.ndarray, iou_the: float) -> List[int]:
     """
     Perform greedy Non-Maximum Suppression on bounding boxes.
 
@@ -28,7 +28,7 @@ def nms_boxes(boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> List[int
         Bounding boxes of shape (N, 4) with format [x1, y1, x2, y2].
     scores : numpy.ndarray
         Confidence scores of shape (N,).
-    iou_thr : float
+    iou_the : float
         IoU threshold for suppression. Boxes with IoU greater than
         this threshold with a higher-scoring box are suppressed.
 
@@ -56,7 +56,7 @@ def nms_boxes(boxes: np.ndarray, scores: np.ndarray, iou_thr: float) -> List[int
         h = np.maximum(0.0, yy2 - yy1)
         inter = w * h
         ovr = inter / (areas[i] + areas[order[1:]] - inter + 1e-9)
-        inds = np.where(ovr <= iou_thr)[0]
+        inds = np.where(ovr <= iou_the)[0]
         order = order[inds + 1]
     return keep
 
@@ -98,9 +98,9 @@ class TRTYOLODetector:
     PERSON_CLASS : int
         COCO class index for person (0).
     """
-    
+
     PERSON_CLASS = 0  # COCO class index for person
-    
+
     def __init__(
         self,
         engine_path: str,
@@ -111,36 +111,52 @@ class TRTYOLODetector:
         self.size = size
         self.conf_thresh = conf_thresh
         self.nms_thresh = nms_thresh
-        
+
         # Load engine
         trt_logger = trt.Logger(trt.Logger.WARNING)
         with open(engine_path, "rb") as f:
             runtime = trt.Runtime(trt_logger)
             self.engine = runtime.deserialize_cuda_engine(f.read())
-        
+
         self.context = self.engine.create_execution_context()
         self.stream = cuda.Stream()
-        
+
         # Check TRT version API
         self.v10_api = hasattr(self.engine, "num_io_tensors")
-        
+
         if self.v10_api:
-            self.io_names = [self.engine.get_tensor_name(i) 
-                           for i in range(self.engine.num_io_tensors)]
-            self.in_name = [n for n in self.io_names 
-                          if self.engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT][0]
-            self.out_name = [n for n in self.io_names 
-                           if self.engine.get_tensor_mode(n) == trt.TensorIOMode.OUTPUT][0]
+            self.io_names = [
+                self.engine.get_tensor_name(i)
+                for i in range(self.engine.num_io_tensors)
+            ]
+            self.in_name = [
+                n
+                for n in self.io_names
+                if self.engine.get_tensor_mode(n) == trt.TensorIOMode.INPUT
+            ][0]
+            self.out_name = [
+                n
+                for n in self.io_names
+                if self.engine.get_tensor_mode(n) == trt.TensorIOMode.OUTPUT
+            ][0]
         else:
-            self.bindings_map = {self.engine.get_binding_name(i): i 
-                                for i in range(self.engine.num_bindings)}
-            self.in_idx = next(i for n, i in self.bindings_map.items() 
-                              if self.engine.binding_is_input(i))
-            self.out_idx = next(i for n, i in self.bindings_map.items() 
-                               if not self.engine.binding_is_input(i))
-        
+            self.bindings_map = {
+                self.engine.get_binding_name(i): i
+                for i in range(self.engine.num_bindings)
+            }
+            self.in_idx = next(
+                i
+                for n, i in self.bindings_map.items()
+                if self.engine.binding_is_input(i)
+            )
+            self.out_idx = next(
+                i
+                for n, i in self.bindings_map.items()
+                if not self.engine.binding_is_input(i)
+            )
+
         logger.info(f"YOLO detector loaded: {engine_path}")
-    
+
     def _preprocess(self, img_bgr: np.ndarray) -> Tuple[np.ndarray, float, int, int]:
         """
         Letterbox preprocessing for YOLO input.
@@ -169,16 +185,16 @@ class TRTYOLODetector:
         new_w, new_h = int(W * scale), int(H * scale)
         pad_w = (self.size - new_w) // 2
         pad_h = (self.size - new_h) // 2
-        
+
         resized = cv2.resize(img_bgr, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
         padded = np.full((self.size, self.size, 3), 114, dtype=np.uint8)
-        padded[pad_h:pad_h + new_h, pad_w:pad_w + new_w] = resized
-        
+        padded[pad_h : pad_h + new_h, pad_w : pad_w + new_w] = resized
+
         # BGR -> RGB, normalize, NHWC -> NCHW
         rgb = cv2.cvtColor(padded, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
         chw = np.transpose(rgb, (2, 0, 1))[None, ...]
         return np.ascontiguousarray(chw), scale, pad_w, pad_h
-    
+
     def _postprocess(
         self,
         output: np.ndarray,
@@ -224,52 +240,52 @@ class TRTYOLODetector:
             output = output[0]
         if output.shape[0] == 84:
             output = output.T  # [84, N] -> [N, 84]
-        
+
         # Extract bbox and class scores
         cx, cy, w, h = output[:, 0], output[:, 1], output[:, 2], output[:, 3]
         class_scores = output[:, 4:]  # [N, 80]
-        
+
         # Get person class score (class 0)
         person_scores = class_scores[:, self.PERSON_CLASS]
-        
+
         # Filter by confidence
         mask = person_scores >= self.conf_thresh
         if not np.any(mask):
             return np.zeros((0, 6), np.float32)  # [x1, y1, x2, y2, conf, class]
-        
+
         cx, cy, w, h = cx[mask], cy[mask], w[mask], h[mask]
         scores = person_scores[mask]
-        
+
         # Convert xywh -> xyxy
         x1 = cx - w / 2
         y1 = cy - h / 2
         x2 = cx + w / 2
         y2 = cy + h / 2
-        
+
         # Remove letterbox and scale to original
         x1 = (x1 - pad_w) / scale
         y1 = (y1 - pad_h) / scale
         x2 = (x2 - pad_w) / scale
         y2 = (y2 - pad_h) / scale
-        
+
         # Clip to image
         x1 = np.clip(x1, 0, orig_w)
         y1 = np.clip(y1, 0, orig_h)
         x2 = np.clip(x2, 0, orig_w)
         y2 = np.clip(y2, 0, orig_h)
-        
+
         # Class is always 0 (person)
         classes = np.zeros_like(scores)
-        
+
         dets = np.stack([x1, y1, x2, y2, scores, classes], axis=1).astype(np.float32)
-        
+
         # NMS
         keep = nms_boxes(dets[:, :4], dets[:, 4], self.nms_thresh)
         if not keep:
             return np.zeros((0, 6), np.float32)
-        
+
         return dets[keep]
-    
+
     def detect(self, img_bgr: np.ndarray, max_num: int = 0) -> np.ndarray:
         """
         Run detection on a single frame.
@@ -295,44 +311,45 @@ class TRTYOLODetector:
         """
         H, W = img_bgr.shape[:2]
         inp, scale, pad_w, pad_h = self._preprocess(img_bgr)
-        
+
         # Allocate device memory
         d_in = cuda.mem_alloc(inp.nbytes)
         cuda.memcpy_htod_async(d_in, inp, self.stream)
-        
+
         if self.v10_api:
             self.context.set_input_shape(self.in_name, tuple(inp.shape))
             self.context.set_tensor_address(self.in_name, int(d_in))
-            
+
             out_shape = tuple(self.context.get_tensor_shape(self.out_name))
             out_size = int(np.prod(out_shape)) * 4
             d_out = cuda.mem_alloc(out_size)
             self.context.set_tensor_address(self.out_name, int(d_out))
-            
+
             self.context.execute_async_v3(self.stream.handle)
         else:
             self.context.set_binding_shape(self.in_idx, tuple(inp.shape))
             out_shape = tuple(self.context.get_binding_shape(self.out_idx))
             out_size = int(np.prod(out_shape)) * 4
             d_out = cuda.mem_alloc(out_size)
-            
+
             bindings = [None] * self.engine.num_bindings
             bindings[self.in_idx] = int(d_in)
             bindings[self.out_idx] = int(d_out)
-            
-            self.context.execute_async_v2(bindings=bindings, 
-                                          stream_handle=self.stream.handle)
-        
+
+            self.context.execute_async_v2(
+                bindings=bindings, stream_handle=self.stream.handle
+            )
+
         out_host = np.empty(out_shape, dtype=np.float32)
         cuda.memcpy_dtoh_async(out_host, d_out, self.stream)
         self.stream.synchronize()
-        
+
         dets = self._postprocess(out_host, scale, pad_w, pad_h, H, W)
-        
+
         if max_num > 0 and len(dets) > max_num:
             # Keep largest by area
             areas = (dets[:, 2] - dets[:, 0]) * (dets[:, 3] - dets[:, 1])
             idx = np.argsort(areas)[::-1][:max_num]
             dets = dets[idx]
-        
+
         return dets
