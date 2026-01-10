@@ -243,11 +243,15 @@ ros2 topic echo /tracked_person/status
 ## Controls
 ##### Endpoint HTTP Control
 ```bash
+# In docker container
   curl -X POST http://127.0.0.1:8080/enroll
   curl -X POST http://127.0.0.1:8080/command -H 'Content-Type: application/json' -d '{"cmd":"enroll"}'
   curl -X POST http://127.0.0.1:8080/clear
   curl http://127.0.0.1:8080/status
   curl -X POST http://127.0.0.1:8080/quit
+# In local host use
+  curl -X POST http://localhost:8080/enroll
+
 ```
 
 

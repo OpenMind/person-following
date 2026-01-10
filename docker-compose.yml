@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   person-following:
-    image: openmindagi/person-following:v0.1.0
+    image: openmindagi/person-following:latest
     container_name: person-following-system
     runtime: nvidia
     privileged: true  # Required for RealSense USB access
