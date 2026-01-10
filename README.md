@@ -83,7 +83,7 @@ docker run \
   -v $(pwd)/engine:/opt/person_following/engine \ (optional)
   -v /dev:/dev \
   person-following:latest \
-  bash /opt/person_following/start_person_following.sh
+  bash /opt/person_following/src/start_person_following.sh
 ```
 
 ### Option 2: Local Installation
