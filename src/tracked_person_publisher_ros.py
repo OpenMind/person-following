@@ -11,6 +11,9 @@ Publishes
   - x          : float  (lateral offset in meters; +right / -left)
   - z          : float  (distance forward in meters)
 
+/person_following_robot/tracked_person/position : geometry_msgs/PoseStamped
+  - Position in camera_color_optical_frame
+
 Control API
 -----------------
 This script now exposes a small HTTP control API (no extra deps) that lets a host
@@ -51,6 +54,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
+from geometry_msgs.msg import PoseStamped
 
 from person_following_command import Command, CommandServer, SharedStatus
 
@@ -357,16 +361,38 @@ class TrackedPersonPublisher(Node):
 
     def __init__(self):
         super().__init__("tracked_person_publisher")
+        
+        # JSON status publisher
         self.publisher = self.create_publisher(String, "/tracked_person/status", 10)
+        # PoseStamped publisher 
+        self.pose_publisher = self.create_publisher(
+            PoseStamped, "/person_following_robot/tracked_person/position", 10
+        )
         self.publish_count = 0
 
     def publish_status(self, is_tracked: bool, x: float, z: float):
-        """Publish tracking status as JSON."""
+        """Publish tracking status as JSON and PoseStamped."""
+        # JSON format
         msg = String()
         msg.data = json.dumps(
             {"is_tracked": is_tracked, "x": round(x, 3), "z": round(z, 3)}
         )
         self.publisher.publish(msg)
+
+        if is_tracked:
+            now = self.get_clock().now()
+            
+            # PoseStamped in camera frame for person_follower.py
+            # Camera optical frame: x=right, y=down, z=forward
+            pose = PoseStamped()
+            pose.header.stamp = now.to_msg()
+            pose.header.frame_id = "camera_color_optical_frame"
+            pose.pose.position.x = x  # lateral offset in meters
+            pose.pose.position.y = 0.0  # not used
+            pose.pose.position.z = z  # distance forward in meters
+            pose.pose.orientation.w = 1.0  # identity quaternion
+            self.pose_publisher.publish(pose)
+
         self.publish_count += 1
 
 
@@ -377,7 +403,6 @@ def compute_lateral_offset(bbox, distance: float, fx: float, cx: float) -> float
     bbox_cx = (x1 + x2) / 2.0
     pixel_offset = bbox_cx - cx
     return (pixel_offset * distance) / fx
-
 
 def draw_visualization(
     frame, result, system, is_tracked, x_offset, distance, publish_count, cmd_url: str
@@ -524,6 +549,7 @@ def main() -> None:
     ros_node = TrackedPersonPublisher()
     logger.info("ROS 2 node initialized")
     logger.info("Publishing to: /tracked_person/status")
+    logger.info("Publishing to: /person_following_robot/tracked_person/position")
 
     logger.info("Initializing camera via ROS topics...")
     camera = RealSenseROSCamera(
