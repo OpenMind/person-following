@@ -14,6 +14,11 @@ Publishes
 /person_following_robot/tracked_person/position : geometry_msgs/PoseStamped
   - Position in camera_color_optical_frame
 
+/tracked_person/detection_image : sensor_msgs/Image
+  - BGR8 annotated image with detection visualization
+  - Includes bounding boxes, tracking IDs, status overlay
+  - Use with rqt_image_view or rviz for headless debugging
+
 Control API
 -----------------
 This script now exposes a small HTTP control API (no extra deps) that lets a host
@@ -368,6 +373,11 @@ class TrackedPersonPublisher(Node):
         self.pose_publisher = self.create_publisher(
             PoseStamped, "/person_following_robot/tracked_person/position", 10
         )
+        # Detection visualization image publisher
+        self.image_publisher = self.create_publisher(
+            Image, "/tracked_person/detection_image", 10
+        )
+        self.bridge = CvBridge()
         self.publish_count = 0
 
     def publish_status(self, is_tracked: bool, x: float, z: float):
@@ -394,6 +404,16 @@ class TrackedPersonPublisher(Node):
             self.pose_publisher.publish(pose)
 
         self.publish_count += 1
+
+    def publish_detection_image(self, image: np.ndarray):
+        """Publish detection visualization image."""
+        try:
+            msg = self.bridge.cv2_to_imgmsg(image, encoding="bgr8")
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "camera_color_optical_frame"
+            self.image_publisher.publish(msg)
+        except Exception as e:
+            self.get_logger().warning(f"Failed to publish detection image: {e}")
 
 
 # Utility
@@ -551,6 +571,7 @@ def main() -> None:
     logger.info("ROS 2 node initialized")
     logger.info("Publishing to: /tracked_person/status")
     logger.info("Publishing to: /person_following_robot/tracked_person/position")
+    logger.info("Publishing to: /tracked_person/detection_image")
 
     logger.info("Initializing camera via ROS topics...")
     camera = RealSenseROSCamera(
@@ -766,21 +787,24 @@ def main() -> None:
                 }
             )
 
-            if args.display:
-                display = draw_visualization(
-                    color_frame,
-                    result,
-                    system,
-                    is_tracked,
-                    x_offset,
-                    distance,
-                    ros_node.publish_count,
-                    cmd_url,
-                )
-                cv2.imshow("Person Following - ROS 2", display)
-                if video_writer:
-                    video_writer.write(display)
+            # Always draw and publish visualization to ROS topic
+            display = draw_visualization(
+                color_frame,
+                result,
+                system,
+                is_tracked,
+                x_offset,
+                distance,
+                ros_node.publish_count,
+                cmd_url,
+            )
+            ros_node.publish_detection_image(display)
 
+            if video_writer:
+                video_writer.write(display)
+
+            if args.display:
+                cv2.imshow("Person Following - ROS 2", display)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     stop_event.set()
