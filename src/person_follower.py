@@ -98,8 +98,8 @@ class PersonFollower(Node):
         self.last_msg_time = None
         self.last_distance_error = 0.0
         self.last_angle_error = 0.0
-        self.stop_sent = False  
-        self.is_tracking = False  
+        self.stop_sent = False
+        self.is_tracking = False
 
         # Safety timer
         self.safety_timer = self.create_timer(0.1, self.safety_check)
@@ -123,7 +123,7 @@ class PersonFollower(Node):
             return
 
         self.last_position = msg
-        self.stop_sent = False  
+        self.stop_sent = False
         self.is_tracking = True
 
         current_time = self.get_clock().now()
