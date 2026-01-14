@@ -50,11 +50,11 @@ import message_filters
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import String
-from geometry_msgs.msg import PoseStamped
 
 from person_following_command import Command, CommandServer, SharedStatus
 
@@ -361,10 +361,10 @@ class TrackedPersonPublisher(Node):
 
     def __init__(self):
         super().__init__("tracked_person_publisher")
-        
+
         # JSON status publisher
         self.publisher = self.create_publisher(String, "/tracked_person/status", 10)
-        # PoseStamped publisher 
+        # PoseStamped publisher
         self.pose_publisher = self.create_publisher(
             PoseStamped, "/person_following_robot/tracked_person/position", 10
         )
@@ -381,7 +381,7 @@ class TrackedPersonPublisher(Node):
 
         if is_tracked:
             now = self.get_clock().now()
-            
+
             # PoseStamped in camera frame for person_follower.py
             # Camera optical frame: x=right, y=down, z=forward
             pose = PoseStamped()
@@ -403,6 +403,7 @@ def compute_lateral_offset(bbox, distance: float, fx: float, cx: float) -> float
     bbox_cx = (x1 + x2) / 2.0
     pixel_offset = bbox_cx - cx
     return (pixel_offset * distance) / fx
+
 
 def draw_visualization(
     frame, result, system, is_tracked, x_offset, distance, publish_count, cmd_url: str
