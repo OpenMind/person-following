@@ -1,24 +1,31 @@
-version: '3.8'
-
 services:
   person-following:
+    build:
+      context: .
+      dockerfile: Dockerfile
     image: openmindagi/person-following:latest
     container_name: person-following-system
     runtime: nvidia
-    privileged: true  # Required for RealSense USB access
-    network_mode: host  # Required for ROS communication
-    restart: no
+    network_mode: host  # Required for ROS communication with other containers
+    restart: unless-stopped
 
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-      - ROS_DOMAIN_ID=42
+      - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
       - DISPLAY=${DISPLAY:-:0}
-      - PYTHONPATH=/opt/person_following/src
-      - HF_TOKEN=${HF_TOKEN} # optional
+      - QT_X11_NO_MITSHM=1
+      - PROJECT_ROOT=/opt/person_following
+      - DISPLAY_ENABLED=${DISPLAY_ENABLED:-false}
+      - HF_TOKEN=${HF_TOKEN:-}  # optional, for HuggingFace models
 
     volumes:
-      # USB devices for RealSense camera
-      - /dev:/dev
+      # X11 for display (optional, for --display flag)
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Engine files (optional, if mounting from host)
+      # - ./engine:/opt/person_following/engine:ro
 
-    command: bash /opt/person_following/src/start_person_following.sh
+    # Default: runs the ROS2 launch file (display disabled by default)
+    # To enable display: DISPLAY_ENABLED=true docker-compose up
+    # Also run: xhost +local:docker (on host)
+    command: ros2 launch /opt/person_following/launch/person_following_launch.py display:=${DISPLAY_ENABLED:-false}

@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """
 ROS 2 Tracked Person Publisher for Robot Dog Following.
 
@@ -10,6 +11,14 @@ Publishes
   - is_tracked : bool
   - x          : float  (lateral offset in meters; +right / -left)
   - z          : float  (distance forward in meters)
+
+/person_following_robot/tracked_person/position : geometry_msgs/PoseStamped
+  - Position in camera_color_optical_frame
+
+/tracked_person/detection_image : sensor_msgs/Image
+  - BGR8 annotated image with detection visualization
+  - Includes bounding boxes, tracking IDs, status overlay
+  - Use with rqt_image_view or rviz for headless debugging
 
 Control API
 -----------------
@@ -47,6 +56,7 @@ import message_filters
 import numpy as np
 import rclpy
 from cv_bridge import CvBridge
+from geometry_msgs.msg import PoseStamped
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image
@@ -357,17 +367,54 @@ class TrackedPersonPublisher(Node):
 
     def __init__(self):
         super().__init__("tracked_person_publisher")
+
+        # JSON status publisher
         self.publisher = self.create_publisher(String, "/tracked_person/status", 10)
+        # PoseStamped publisher
+        self.pose_publisher = self.create_publisher(
+            PoseStamped, "/person_following_robot/tracked_person/position", 10
+        )
+        # Detection visualization image publisher
+        self.image_publisher = self.create_publisher(
+            Image, "/tracked_person/detection_image", 10
+        )
+        self.bridge = CvBridge()
         self.publish_count = 0
 
     def publish_status(self, is_tracked: bool, x: float, z: float):
-        """Publish tracking status as JSON."""
+        """Publish tracking status as JSON and PoseStamped."""
+        # JSON format
         msg = String()
         msg.data = json.dumps(
             {"is_tracked": is_tracked, "x": round(x, 3), "z": round(z, 3)}
         )
         self.publisher.publish(msg)
+
+        if is_tracked:
+            now = self.get_clock().now()
+
+            # PoseStamped in camera frame for person_follower.py
+            # Camera optical frame: x=right, y=down, z=forward
+            pose = PoseStamped()
+            pose.header.stamp = now.to_msg()
+            pose.header.frame_id = "camera_color_optical_frame"
+            pose.pose.position.x = x  # lateral offset in meters
+            pose.pose.position.y = 0.0  # not used
+            pose.pose.position.z = z  # distance forward in meters
+            pose.pose.orientation.w = 1.0  # identity quaternion
+            self.pose_publisher.publish(pose)
+
         self.publish_count += 1
+
+    def publish_detection_image(self, image: np.ndarray):
+        """Publish detection visualization image."""
+        try:
+            msg = self.bridge.cv2_to_imgmsg(image, encoding="bgr8")
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = "camera_color_optical_frame"
+            self.image_publisher.publish(msg)
+        except Exception as e:
+            self.get_logger().warning(f"Failed to publish detection image: {e}")
 
 
 # Utility
@@ -524,6 +571,8 @@ def main() -> None:
     ros_node = TrackedPersonPublisher()
     logger.info("ROS 2 node initialized")
     logger.info("Publishing to: /tracked_person/status")
+    logger.info("Publishing to: /person_following_robot/tracked_person/position")
+    logger.info("Publishing to: /tracked_person/detection_image")
 
     logger.info("Initializing camera via ROS topics...")
     camera = RealSenseROSCamera(
@@ -739,21 +788,24 @@ def main() -> None:
                 }
             )
 
-            if args.display:
-                display = draw_visualization(
-                    color_frame,
-                    result,
-                    system,
-                    is_tracked,
-                    x_offset,
-                    distance,
-                    ros_node.publish_count,
-                    cmd_url,
-                )
-                cv2.imshow("Person Following - ROS 2", display)
-                if video_writer:
-                    video_writer.write(display)
+            # Always draw and publish visualization to ROS topic
+            display = draw_visualization(
+                color_frame,
+                result,
+                system,
+                is_tracked,
+                x_offset,
+                distance,
+                ros_node.publish_count,
+                cmd_url,
+            )
+            ros_node.publish_detection_image(display)
 
+            if video_writer:
+                video_writer.write(display)
+
+            if args.display:
+                cv2.imshow("Person Following - ROS 2", display)
                 key = cv2.waitKey(1) & 0xFF
                 if key == ord("q"):
                     stop_event.set()

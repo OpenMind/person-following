@@ -1,4 +1,4 @@
-# Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Jazzy + realsense-ros)
+# Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Jazzy)
 FROM nvcr.io/nvidia/pytorch:25.10-py3
 
 SHELL ["/bin/bash", "-lc"]
@@ -58,45 +58,14 @@ RUN set -eux; \
       ros-jazzy-image-transport \
       ros-jazzy-camera-info-manager \
       ros-jazzy-diagnostic-updater \
+      ros-jazzy-launch \
+      ros-jazzy-launch-ros \
       python3-rosdep \
       python3-colcon-common-extensions \
       python3-vcstool \
     ; \
     (rosdep init || true); \
     rosdep update; \
-    rm -rf /var/lib/apt/lists/*
-
-# Build librealsense (no python bindings)
-ARG LIBREALSENSE_VERSION=v2.57.5
-RUN git clone --depth 1 --branch ${LIBREALSENSE_VERSION} \
-      https://github.com/IntelRealSense/librealsense.git /tmp/librealsense && \
-    mkdir -p /tmp/librealsense/build && cd /tmp/librealsense/build && \
-    cmake .. \
-      -DCMAKE_BUILD_TYPE=Release \
-      -DBUILD_WITH_CUDA=ON \
-      -DBUILD_PYTHON_BINDINGS=OFF \
-      -DFORCE_RSUSB_BACKEND=ON \
-      -DBUILD_EXAMPLES=OFF \
-      -DBUILD_GRAPHICAL_EXAMPLES=OFF && \
-    cmake --build . -j"$(nproc)" && \
-    cmake --install . && \
-    ldconfig && \
-    rm -rf /tmp/librealsense
-
-# Build realsense-ros
-ARG REALSENSE_ROS_BRANCH=ros2-master
-RUN mkdir -p /opt/realsense_ws/src && \
-    cd /opt/realsense_ws/src && \
-    git clone --depth 1 -b ${REALSENSE_ROS_BRANCH} \
-      https://github.com/IntelRealSense/realsense-ros.git && \
-    cd /opt/realsense_ws && \
-    source /opt/ros/${ROS_DISTRO}/setup.bash && \
-    apt-get update -o Acquire::Retries=5 && \
-    rosdep install --from-paths src --ignore-src -r -y \
-      --rosdistro ${ROS_DISTRO} \
-      --skip-keys=librealsense2 \
-      -t build -t exec && \
-    colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy project
@@ -125,18 +94,18 @@ RUN python3 -m venv ${VIRTUAL_ENV} --system-site-packages && \
     ${VIRTUAL_ENV}/bin/python -c "import numpy, cv2; print('numpy:', numpy.__version__, numpy.__file__); print('cv2:', cv2.__version__)"
 
 # Dirs
-RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts && \
-    chmod +x ${PROJECT_ROOT}/scripts/*.sh 2>/dev/null || true
+RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/launch && \
+    chmod +x ${PROJECT_ROOT}/scripts/*.sh 2>/dev/null || true && \
+    chmod +x ${PROJECT_ROOT}/src/*.py 2>/dev/null || true
 
 # Entrypoint
 RUN printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -e' \
   'source /opt/ros/jazzy/setup.bash' \
-  'source /opt/realsense_ws/install/setup.bash' \
   'export PATH=/opt/venv/bin:$PATH' \
   'exec "$@"' \
   > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["bash"]
+CMD ["ros2", "launch", "/opt/person_following/launch/person_following.launch.py"]
