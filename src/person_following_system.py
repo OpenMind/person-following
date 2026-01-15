@@ -8,12 +8,15 @@ Two-stage matching:
 
 import logging
 import time
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
 from clothing_matcher_lab_openclip import ClothingMatcher, SegmentationError
 from target_state import TargetState
+
+CLIP_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "model")
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -108,6 +111,7 @@ class PersonFollowingSystem:
             use_clip=use_clip,
             clip_model=clip_model,
             clip_pretrained=clip_pretrained,
+            clip_cache_dir=CLIP_CACHE_DIR,
         )
         self.use_clip = use_clip and self.clothing_matcher.clip_matcher is not None
         self.seg_conf_thresh = seg_conf_thresh

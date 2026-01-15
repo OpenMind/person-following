@@ -22,6 +22,7 @@ services:
     volumes:
       # X11 for display (optional, for --display flag)
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ./model:/opt/person_following/model:ro
       # Engine files (optional, if mounting from host)
       # - ./engine:/opt/person_following/engine:ro
 

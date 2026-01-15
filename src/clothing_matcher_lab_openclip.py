@@ -10,8 +10,9 @@ Uses OpenCLIP ViT-B-16 for visual-semantic feature extraction.
 """
 
 import logging
+import os
 import warnings
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -337,6 +338,7 @@ class OpenCLIPMatcher:
         model_name: str = "ViT-B-16",
         pretrained: str = "laion2b_s34b_b88k",
         device: str = "cuda",
+        cache_dir: Optional[str] = None,
     ):
         if not HAS_OPENCLIP:
             raise RuntimeError(
@@ -349,8 +351,13 @@ class OpenCLIPMatcher:
 
         logger.info(f"Loading OpenCLIP {model_name} ({pretrained})...")
 
+        kwargs = dict(pretrained=pretrained, device=device)
+        if cache_dir is not None:
+            os.makedirs(cache_dir, exist_ok=True)
+            kwargs["cache_dir"] = cache_dir
+
         self.model, _, self.preprocess = open_clip.create_model_and_transforms(
-            model_name, pretrained=pretrained, device=device
+            model_name, **kwargs
         )
         self.model.eval()
 
@@ -515,6 +522,7 @@ class ClothingMatcher:
         use_clip: bool = True,
         clip_model: str = "ViT-B-16",
         clip_pretrained: str = "laion2b_s34b_b88k",
+        clip_cache_dir: Optional[str] = None,
     ):
         self.device = device
 
@@ -526,7 +534,10 @@ class ClothingMatcher:
         self.clip_matcher = None
         if use_clip and HAS_OPENCLIP:
             self.clip_matcher = OpenCLIPMatcher(
-                model_name=clip_model, pretrained=clip_pretrained, device=device
+                model_name=clip_model,
+                pretrained=clip_pretrained,
+                device=device,
+                cache_dir=clip_cache_dir,
             )
 
         logger.info("ClothingMatcher initialized")

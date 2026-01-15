@@ -239,6 +239,27 @@ ros2 topic echo /tracked_person/status
 
 ```
 
+### Optional - if you want to use local open-clip
+```bash
+cd person-following-sys
+python - <<'PY'
+import open_clip
+
+model_name = "ViT-B-16"
+pretrained = "laion2b_s34b_b88k"
+
+cache_dir = "./model"
+
+open_clip.create_model_and_transforms(
+    model_name,
+    pretrained=pretrained,
+    device="cpu",
+    cache_dir=cache_dir,
+)
+print("Downloaded into:", cache_dir)
+PY
+```
+
 
 ## Controls
 ##### Endpoint HTTP Control
