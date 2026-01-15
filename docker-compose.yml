@@ -20,5 +20,7 @@ services:
     volumes:
       # USB devices for RealSense camera
       - /dev:/dev
+      - ./model:/opt/person_following/model:ro
+
 
     command: bash /opt/person_following/src/start_person_following.sh
