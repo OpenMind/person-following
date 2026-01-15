@@ -108,6 +108,7 @@ class PersonFollowingSystem:
             use_clip=use_clip,
             clip_model=clip_model,
             clip_pretrained=clip_pretrained,
+            clip_cache_dir="./model",
         )
         self.use_clip = use_clip and self.clothing_matcher.clip_matcher is not None
         self.seg_conf_thresh = seg_conf_thresh
