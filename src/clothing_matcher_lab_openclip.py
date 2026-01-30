@@ -98,16 +98,6 @@ class TRTSegmentationModel:
         Output buffer information.
     stream : cuda.Stream
         CUDA stream for async operations.
-
-    Raises
-    ------
-    RuntimeError
-        If TensorRT is not available.
-
-    Examples
-    --------
-    >>> model = TRTSegmentationModel("yolo11s-seg.engine")
-    >>> outputs, scale, pads, sizes = model.infer(image)
     """
 
     def __init__(self, engine_path: str):
@@ -142,9 +132,6 @@ class TRTSegmentationModel:
     def _allocate_buffers(self):
         """
         Allocate CUDA buffers for input and output tensors.
-
-        Creates page-locked host memory and device memory for all
-        input and output tensors of the TensorRT engine.
         """
         self.inputs = []
         self.outputs = []
@@ -308,24 +295,6 @@ class OpenCLIPMatcher:
         Image preprocessing transform.
     embed_dim : int
         Dimension of output embeddings.
-
-    Raises
-    ------
-    RuntimeError
-        If OpenCLIP is not available.
-
-    Notes
-    -----
-    OpenCLIP advantages for cross-view matching:
-    - Trained with text-image pairs, learns semantic concepts
-    - "Green jacket from front" and "green jacket from back" produce similar embeddings
-    - More robust to viewpoint changes than purely visual models
-
-    Examples
-    --------
-    >>> matcher = OpenCLIPMatcher(model_name='ViT-B-16')
-    >>> embedding = matcher.extract_embedding(image, mask)
-    >>> similarity = matcher.compute_similarity(emb1, emb2)
     """
 
     # OpenCLIP mean/std (same as CLIP)
@@ -340,6 +309,20 @@ class OpenCLIPMatcher:
         device: str = "cuda",
         cache_dir: Optional[str] = None,
     ):
+        """
+        Initialize OpenCLIP feature extractor.
+
+        Parameters
+        ----------
+        model_name : str, optional
+            CLIP model architecture, by default 'ViT-B-16'.
+        pretrained : str, optional
+            Pretrained weights name, by default 'laion2b_s34b_b88k'.
+        device : str, optional
+            Compute device, by default 'cuda'.
+        cache_dir : str, optional
+            Directory to cache downloaded models.
+        """
         if not HAS_OPENCLIP:
             raise RuntimeError(
                 "OpenCLIP not available. Install with: pip install open-clip-torch"
@@ -391,11 +374,6 @@ class OpenCLIPMatcher:
         -------
         numpy.ndarray
             L2-normalized embedding vector of shape (embed_dim,).
-
-        Raises
-        ------
-        ValueError
-            If mask is None or has fewer than 500 pixels.
         """
         if mask is None or mask.sum() < 500:
             raise ValueError(
@@ -494,18 +472,6 @@ class ClothingMatcher:
         Default clothing similarity threshold (0.5).
     CLIP_THRESHOLD : float
         Default OpenCLIP similarity threshold (0.7).
-
-    Raises
-    ------
-    RuntimeError
-        If TensorRT is not available.
-
-    Examples
-    --------
-    >>> matcher = ClothingMatcher("yolo11s-seg.engine", use_clip=True)
-    >>> mask = matcher.extract_person_mask_from_crop(crop)
-    >>> features = matcher.extract_clothing_features(image, mask)
-    >>> similarity = matcher.compute_clothing_similarity(feat1, feat2)
     """
 
     L_BINS = 16
@@ -566,11 +532,6 @@ class ClothingMatcher:
             Detection output tensor.
         proto_output : numpy.ndarray
             Prototype mask output tensor.
-
-        Raises
-        ------
-        SegmentationError
-            If outputs cannot be identified.
         """
         det_output = None
         proto_output = None
@@ -677,11 +638,6 @@ class ClothingMatcher:
         -------
         numpy.ndarray
             Binary mask of shape (height, width) with dtype uint8.
-
-        Raises
-        ------
-        SegmentationError
-            If no valid person is detected or mask coverage is invalid.
         """
         h, w = crop.shape[:2]
         outputs, scale, (pad_w, pad_h), (new_w, new_h) = self.seg_model.infer(crop)
@@ -851,11 +807,6 @@ class ClothingMatcher:
                 Total pixels in mask.
             - 'upper_pixels', 'lower_pixels' : int
                 Pixels in upper/lower body regions.
-
-        Raises
-        ------
-        ValueError
-            If mask is None, shape mismatches, or too few pixels.
         """
         if mask is None:
             raise ValueError("Mask cannot be None")
@@ -944,11 +895,6 @@ class ClothingMatcher:
         -------
         numpy.ndarray
             L2-normalized embedding vector.
-
-        Raises
-        ------
-        RuntimeError
-            If OpenCLIP is not initialized.
         """
         if self.clip_matcher is None:
             raise RuntimeError("OpenCLIP not initialized")
@@ -1050,11 +996,6 @@ class ClothingMatcher:
         -------
         float
             Cosine similarity score.
-
-        Raises
-        ------
-        RuntimeError
-            If OpenCLIP is not initialized.
         """
         if self.clip_matcher is None:
             raise RuntimeError("OpenCLIP not initialized")
