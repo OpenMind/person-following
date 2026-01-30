@@ -1,28 +1,23 @@
 """
 Person Following System - Lab + OpenCLIP.
-
-UPDATES:
-- Added enrolled_history for storing greeted persons
-- Added switch_target functionality with SwitchState
-- Added history persistence (save/load to pkl file)
-- Added _is_in_history with closest bucket matching
-- Added dynamic max_history_size
 """
 
 import logging
-import time
 import pickle
+import time
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 import numpy as np
 
 from clothing_matcher_lab_openclip import ClothingMatcher, SegmentationError
+from switch_state import SwitchState
 from target_state import TargetState
-from switch_state import SwitchState  # NEW import
 
 CLIP_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "model")
-DEFAULT_HISTORY_PATH = str(Path(__file__).resolve().parents[1] / "history" / "person_following_history.pkl")
+DEFAULT_HISTORY_PATH = str(
+    Path(__file__).resolve().parents[1] / "history" / "person_following_history.pkl"
+)
 MAX_SAVE_HISTORY = 100  # Max entries to save in file
 
 logger = logging.getLogger(__name__)
@@ -65,7 +60,9 @@ class PersonFollowingSystem:
         searching_timeout: float = 5.0,
         operation_mode: OperationMode = "greeting",
     ):
-        """Initialize the person following system"""
+        """
+        Initialize the person following system.
+        """
         from yolo_detector import TRTYOLODetector
 
         self.detector = TRTYOLODetector(
@@ -75,9 +72,12 @@ class PersonFollowingSystem:
         self.tracker_type = tracker_type
 
         self.clothing_matcher = ClothingMatcher(
-            yolo_seg_engine, device,
-            use_clip=use_clip, clip_model=clip_model,
-            clip_pretrained=clip_pretrained, clip_cache_dir=CLIP_CACHE_DIR,
+            yolo_seg_engine,
+            device,
+            use_clip=use_clip,
+            clip_model=clip_model,
+            clip_pretrained=clip_pretrained,
+            clip_cache_dir=CLIP_CACHE_DIR,
         )
         self.use_clip = use_clip and self.clothing_matcher.clip_matcher is not None
         self.seg_conf_thresh = seg_conf_thresh
@@ -97,7 +97,9 @@ class PersonFollowingSystem:
         # History management
         self.max_history_size = max_history_size
         self.enrolled_history: List[dict] = []
-        self.history_file = Path(history_file) if history_file else Path(DEFAULT_HISTORY_PATH)
+        self.history_file = (
+            Path(history_file) if history_file else Path(DEFAULT_HISTORY_PATH)
+        )
         self.auto_save_history = auto_save_history
 
         # Switch state machine
@@ -106,7 +108,7 @@ class PersonFollowingSystem:
             candidate_timeout=switch_candidate_timeout,
         )
 
-        # NEW: Approach and searching timeout settings
+        # Approach and searching timeout settings
         self.approach_distance = approach_distance
         self.searching_timeout = searching_timeout
 
@@ -119,7 +121,7 @@ class PersonFollowingSystem:
         self.target.MIN_MASK_COVERAGE = min_mask_coverage
         self.target.MIN_MASK_COVERAGE_FOR_MATCH = min_mask_coverage - 5
         self.target.BUCKET_SPACING = bucket_spacing
-        self.target.operation_mode = operation_mode  # NEW: Set target's mode
+        self.target.operation_mode = operation_mode  # Set target's mode
 
         self.frame_width = 640
         self.frame_height = 480
@@ -132,7 +134,9 @@ class PersonFollowingSystem:
         logger.info(f"  - Operation mode: {operation_mode}")
         logger.info(f"  - Clothing threshold: {clothing_threshold}")
         logger.info(f"  - CLIP threshold: {clip_threshold}")
-        logger.info(f"  - Switch interval: {switch_interval}s (~{1/switch_interval:.1f} Hz)")
+        logger.info(
+            f"  - Switch interval: {switch_interval}s (~{1/switch_interval:.1f} Hz)"
+        )
         logger.info(f"  - Switch timeout: {switch_candidate_timeout}s per candidate")
         logger.info(f"  - Max history size: {max_history_size}")
         logger.info(f"  - History file: {self.history_file}")
@@ -142,7 +146,6 @@ class PersonFollowingSystem:
         # Auto load history on startup
         if auto_load_history:
             self.load_history()
-
 
     # Operation Mode Management
     def set_operation_mode(self, mode: OperationMode) -> dict:
@@ -175,9 +178,9 @@ class PersonFollowingSystem:
         """
         if mode not in ("greeting", "following"):
             raise ValueError(f"Invalid mode: {mode}. Must be 'greeting' or 'following'")
-        
+
         old_mode = self.operation_mode
-        
+
         if mode == old_mode:
             logger.info(f"[MODE] Already in {mode} mode")
             return {
@@ -185,32 +188,32 @@ class PersonFollowingSystem:
                 "old_mode": old_mode,
                 "new_mode": mode,
             }
-        
+
         logger.info(f"[MODE] Switching: {old_mode} -> {mode}")
-        
+
         actions = []
-        
+
         # Clear current target
         if self.target.status != "INACTIVE":
             self.clear_target()
             actions.append("cleared_target")
-        
+
         # Stop switch operation if active
         if self.switch_state.active:
             self.switch_state.stop()
             actions.append("stopped_switch")
-        
+
         # Update mode
         self.operation_mode = mode
         self.target.operation_mode = mode
-        
+
         # Load history if switching to greeting mode
         if mode == "greeting":
             self.load_history()
             actions.append("loaded_history")
-        
+
         logger.info(f"[MODE] Now in {mode.upper()} mode (actions: {actions})")
-        
+
         return {
             "changed": True,
             "old_mode": old_mode,
@@ -247,14 +250,23 @@ class PersonFollowingSystem:
         """
         if tracker_type == "botsort":
             from boxmot import BotSort
+
             return BotSort(
-                reid_weights=None, device="cuda", half=False,
-                track_high_thresh=0.5, track_low_thresh=0.1,
-                new_track_thresh=0.6, track_buffer=30, match_thresh=0.8,
-                proximity_thresh=0.5, appearance_thresh=0.25, with_reid=False,
+                reid_weights=None,
+                device="cuda",
+                half=False,
+                track_high_thresh=0.5,
+                track_low_thresh=0.1,
+                new_track_thresh=0.6,
+                track_buffer=30,
+                match_thresh=0.8,
+                proximity_thresh=0.5,
+                appearance_thresh=0.25,
+                with_reid=False,
             )
         elif tracker_type == "bytetrack":
             from boxmot import ByteTrack
+
             return ByteTrack(track_thresh=0.5, track_buffer=30, match_thresh=0.8)
         raise ValueError(f"Unknown tracker: {tracker_type}")
 
@@ -280,8 +292,15 @@ class PersonFollowingSystem:
         tracks = self.tracker.update(detections, frame)
         return tracks if len(tracks) > 0 else np.empty((0, 7))
 
-    # Distance helpers 
-    def _split_lidar_clusters(self, scan_idx_sorted, ranges_sorted, range_jump, min_cluster_size, max_index_gap=1) -> List[np.ndarray]:
+    # Distance helpers
+    def _split_lidar_clusters(
+        self,
+        scan_idx_sorted,
+        ranges_sorted,
+        range_jump,
+        min_cluster_size,
+        max_index_gap=1,
+    ) -> List[np.ndarray]:
         """
         Split LiDAR points into clusters based on range discontinuities.
 
@@ -366,8 +385,10 @@ class PersonFollowingSystem:
         order = np.argsort(sel_idx)
         idx_sorted, r_sorted = sel_idx[order], sel_ranges[order]
         clusters = self._split_lidar_clusters(
-            idx_sorted, r_sorted,
-            self.lidar_cluster_range_jump, self.lidar_cluster_min_size
+            idx_sorted,
+            r_sorted,
+            self.lidar_cluster_range_jump,
+            self.lidar_cluster_min_size,
         )
         if clusters:
             cluster_medians = [(c, float(np.median(r_sorted[c]))) for c in clusters]
@@ -401,7 +422,9 @@ class PersonFollowingSystem:
             x1, y1, x2, y2 = bbox
             H, W = depth_frame.shape[:2]
             cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
-            roi = depth_frame[max(0, cy-10):min(H, cy+10), max(0, cx-10):min(W, cx+10)]
+            roi = depth_frame[
+                max(0, cy - 10) : min(H, cy + 10), max(0, cx - 10) : min(W, cx + 10)
+            ]
             valid = roi[(roi > 0.3) & (roi < 10.0)]
             return (float(np.median(valid)) if len(valid) > 0 else 0.0), 0, 0
         if aux is not None:
@@ -432,7 +455,13 @@ class PersonFollowingSystem:
         error_msg : str or None
             Error message if extraction failed, None otherwise.
         """
-        mask, clothing_feat, clip_emb, mask_coverage, error_msg = None, None, None, 0.0, None
+        mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
+            None,
+            None,
+            None,
+            0.0,
+            None,
+        )
         try:
             mask = self.clothing_matcher.extract_person_mask_from_crop(
                 crop, conf_thresh=self.seg_conf_thresh, validate_centroid=True
@@ -455,7 +484,7 @@ class PersonFollowingSystem:
     def _save_current_target_to_history(self) -> bool:
         """
         Save ALL bucket features from current target to history.
-        
+
         History entry structure:
         {
             'buckets': {
@@ -465,6 +494,7 @@ class PersonFollowingSystem:
             'timestamp': float,
             'track_id': int,
         }
+
         Returns
         -------
         bool
@@ -472,56 +502,53 @@ class PersonFollowingSystem:
         """
         if self.target.status == "INACTIVE":
             return False
-        
+
         if not self.target.features:
             logger.warning("No features to save to history")
             return False
-        
+
         # Copy the bucket structure
         buckets_copy = {}
         feature_count = 0
-        
+
         for bucket, directions in self.target.features.items():
             buckets_copy[bucket] = {}
             for direction, data in directions.items():
-                if data is not None and data.get('clothing') is not None:
+                if data is not None and data.get("clothing") is not None:
                     buckets_copy[bucket][direction] = {
-                        'clothing': data['clothing'],
-                        'clip': data.get('clip'),
-                        'mask_coverage': data.get('mask_coverage', 0),
+                        "clothing": data["clothing"],
+                        "clip": data.get("clip"),
+                        "mask_coverage": data.get("mask_coverage", 0),
                     }
                     feature_count += 1
-        
+
         if feature_count == 0:
             logger.warning("No valid features found in target")
             return False
-        
+
         entry = {
-            'buckets': buckets_copy,
-            'timestamp': time.time(),
-            'track_id': self.target.track_id,
-            'base_distance': self.target.base_distance,
+            "buckets": buckets_copy,
+            "timestamp": time.time(),
+            "track_id": self.target.track_id,
+            "base_distance": self.target.base_distance,
         }
-        
+
         self.enrolled_history.append(entry)
-        
+
         if len(self.enrolled_history) > self.max_history_size:
             removed = self.enrolled_history.pop(0)
-            logger.info(f"History full, removed oldest (track_id={removed.get('track_id')})")
-        
+            logger.info(
+                f"History full, removed oldest (track_id={removed.get('track_id')})"
+            )
+
         logger.info(
             f"Saved to history: {feature_count} features across {len(buckets_copy)} buckets "
             f"(history size: {len(self.enrolled_history)})"
         )
         return True
 
-
-
-
     def _get_closest_bucket_features(
-        self, 
-        buckets: dict, 
-        query_distance: float
+        self, buckets: dict, query_distance: float
     ) -> Tuple[Optional[dict], Optional[dict]]:
         """
         Get features from history entry at closest distance bucket.
@@ -541,19 +568,19 @@ class PersonFollowingSystem:
         """
         if not buckets:
             return None, None
-        
+
         # Find closest bucket by absolute distance difference
         closest_bucket = min(buckets.keys(), key=lambda b: abs(b - query_distance))
-        
+
         directions = buckets.get(closest_bucket, {})
-        approaching = directions.get('approaching')
-        leaving = directions.get('leaving')
-        
+        approaching = directions.get("approaching")
+        leaving = directions.get("leaving")
+
         return approaching, leaving
 
     def _is_in_history(
-        self, 
-        clothing_feat: dict, 
+        self,
+        clothing_feat: dict,
         clip_emb: Optional[np.ndarray],
         query_distance: float,
     ) -> Tuple[bool, float, float]:
@@ -580,37 +607,49 @@ class PersonFollowingSystem:
         """
         if not self.enrolled_history:
             return False, 0.0, 0.0
-        
+
         best_clothing_sim = 0.0
         best_clip_sim = 0.0
-        
+
         for hist_entry in self.enrolled_history:
-            buckets = hist_entry.get('buckets', {})
-            
+            buckets = hist_entry.get("buckets", {})
+
             # Legacy format support (single feature)
-            if not buckets and 'clothing' in hist_entry:
-                buckets = {2.0: {'approaching': {'clothing': hist_entry['clothing'], 'clip': hist_entry.get('clip')}}}
-            
+            if not buckets and "clothing" in hist_entry:
+                buckets = {
+                    2.0: {
+                        "approaching": {
+                            "clothing": hist_entry["clothing"],
+                            "clip": hist_entry.get("clip"),
+                        }
+                    }
+                }
+
             # Get closest bucket's features
-            approaching, leaving = self._get_closest_bucket_features(buckets, query_distance)
-            
+            approaching, leaving = self._get_closest_bucket_features(
+                buckets, query_distance
+            )
+
             # Compare against approaching and leaving (max 2 comparisons per person)
-            for direction_name, feat in [('approaching', approaching), ('leaving', leaving)]:
+            for direction_name, feat in [
+                ("approaching", approaching),
+                ("leaving", leaving),
+            ]:
                 if feat is None:
                     continue
-                
-                hist_clothing = feat.get('clothing')
-                hist_clip = feat.get('clip')
-                
+
+                hist_clothing = feat.get("clothing")
+                hist_clip = feat.get("clip")
+
                 if hist_clothing is None:
                     continue
-                
+
                 # Clothing similarity
                 c_sim = self.clothing_matcher.compute_clothing_similarity(
                     clothing_feat, hist_clothing
                 )
                 best_clothing_sim = max(best_clothing_sim, c_sim)
-                
+
                 # If clothing matches, check CLIP
                 if c_sim >= self.clothing_threshold:
                     if self.use_clip and clip_emb is not None and hist_clip is not None:
@@ -618,7 +657,7 @@ class PersonFollowingSystem:
                             clip_emb, hist_clip
                         )
                         best_clip_sim = max(best_clip_sim, clip_sim)
-                        
+
                         if clip_sim >= self.clip_threshold:
                             logger.debug(
                                 f"MATCH: track_id={hist_entry.get('track_id')} "
@@ -632,7 +671,7 @@ class PersonFollowingSystem:
                             f"C={c_sim:.3f} ({direction_name})"
                         )
                         return True, best_clothing_sim, best_clip_sim
-        
+
         return False, best_clothing_sim, best_clip_sim
 
     def set_max_history_size(self, new_size: int) -> dict:
@@ -660,7 +699,12 @@ class PersonFollowingSystem:
             trimmed = len(self.enrolled_history) - new_size
             self.enrolled_history = self.enrolled_history[-new_size:]
         logger.info(f"max_history_size: {old} ’ {new_size}, trimmed {trimmed}")
-        return {"old_size": old, "new_size": new_size, "trimmed_count": trimmed, "current_count": len(self.enrolled_history)}
+        return {
+            "old_size": old,
+            "new_size": new_size,
+            "trimmed_count": trimmed,
+            "current_count": len(self.enrolled_history),
+        }
 
     def clear_history(self, delete_file: bool = False) -> dict:
         """
@@ -707,8 +751,10 @@ class PersonFollowingSystem:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             to_save = self.enrolled_history[-MAX_SAVE_HISTORY:]
-            with open(path, 'wb') as f:
-                pickle.dump({'version': 2, 'history': to_save, 'saved_at': time.time()}, f)
+            with open(path, "wb") as f:
+                pickle.dump(
+                    {"version": 2, "history": to_save, "saved_at": time.time()}, f
+                )
             logger.info(f"History saved: {len(to_save)} entries’ {path}")
             return {"success": True, "filepath": str(path), "count": len(to_save)}
         except Exception as e:
@@ -734,13 +780,19 @@ class PersonFollowingSystem:
             logger.info(f"History file not found: {path} (starting fresh)")
             return {"success": True, "loaded_count": 0, "message": "file_not_found"}
         try:
-            with open(path, 'rb') as f:
+            with open(path, "rb") as f:
                 data = pickle.load(f)
-            all_hist = data['history'] if isinstance(data, dict) else data
+            all_hist = data["history"] if isinstance(data, dict) else data
             file_count = len(all_hist)
-            self.enrolled_history = all_hist[-self.max_history_size:]
-            logger.info(f"History loaded: {len(self.enrolled_history)}/{file_count} entries (max={self.max_history_size})")
-            return {"success": True, "loaded_count": len(self.enrolled_history), "file_count": file_count}
+            self.enrolled_history = all_hist[-self.max_history_size :]
+            logger.info(
+                f"History loaded: {len(self.enrolled_history)}/{file_count} entries (max={self.max_history_size})"
+            )
+            return {
+                "success": True,
+                "loaded_count": len(self.enrolled_history),
+                "file_count": file_count,
+            }
         except Exception as e:
             logger.error(f"Failed to load history: {e}")
             self.enrolled_history = []
@@ -757,7 +809,6 @@ class PersonFollowingSystem:
         """
         return len(self.enrolled_history)
 
-
     def handle_greeting_acknowledged(self) -> dict:
         """
         Handle greeting acknowledgment from user.
@@ -773,25 +824,27 @@ class PersonFollowingSystem:
         """
         # Only available in greeting mode
         if self.operation_mode != "greeting":
-            logger.warning("handle_greeting_acknowledged called in following mode - ignoring")
+            logger.warning(
+                "handle_greeting_acknowledged called in following mode - ignoring"
+            )
             return {
                 "saved": False,
                 "history_size": 0,
                 "status": self.target.status,
                 "error": "not_available_in_following_mode",
             }
-        
+
         saved = False
         if self.target.status != "INACTIVE":
             saved = self._save_current_target_to_history()
             if self.auto_save_history:
                 self.save_history()
             logger.info(f"Greeting acknowledged - saved={saved}, going inactive")
-        
+
         self.clear_target()
-        
+
         return {
-            "saved": saved, 
+            "saved": saved,
             "history_size": len(self.enrolled_history),
             "status": "INACTIVE",
         }
@@ -831,23 +884,23 @@ class PersonFollowingSystem:
                 "started": False,
                 "reason": "not_available_in_following_mode",
             }
-        
+
         timestamp = time.time()
-        
+
         # Save current target to history first
         saved = False
         if self.target.status != "INACTIVE":
             saved = self._save_current_target_to_history()
-        
+
         # Clear current target
         self.clear_target()
-        
+
         # Detect candidates
         detections = self.detector.detect(color_frame)
         H, W = color_frame.shape[:2]
         self.frame_width, self.frame_height = W, H
         tracks = self._run_tracker(detections, color_frame)
-        
+
         candidates = []
         for track in tracks:
             x1, y1, x2, y2 = map(int, track[:4])
@@ -864,18 +917,22 @@ class PersonFollowingSystem:
             if dist < 0.3:
                 continue
             candidates.append({"track_id": track_id, "bbox": bbox, "distance": dist})
-        
+
         if not candidates:
             logger.warning("[SWITCH] No valid candidates found")
-            return {"started": False, "reason": "no_candidates", "saved_to_history": saved}
-        
+            return {
+                "started": False,
+                "reason": "no_candidates",
+                "saved_to_history": saved,
+            }
+
         # Sort by distance (closest first)
         candidates.sort(key=lambda p: p["distance"])
-        
+
         # Start switch state machine
         self.switch_state.start(candidates, timestamp)
         self.target.status = "SWITCHING"
-        
+
         return {
             "started": True,
             "candidates_count": len(candidates),
@@ -883,7 +940,6 @@ class PersonFollowingSystem:
             "history_size": len(self.enrolled_history),
         }
 
-    
     # Process Frame - Main loop
     def process_frame(
         self,
@@ -948,13 +1004,13 @@ class PersonFollowingSystem:
         result = {
             "timestamp": current_time,
             "status": self.target.status,
-            "operation_mode": self.operation_mode,  # NEW: Include mode in result
+            "operation_mode": self.operation_mode,  # Include mode in result
             "fps": np.mean(self.fps_history) if self.fps_history else 0,
             "num_detections": len(detections),
             "num_tracks": len(tracks),
             "all_tracks": self.all_tracks,
         }
-        
+
         # Only include history info in greeting mode
         if self.operation_mode == "greeting":
             result["history_size"] = len(self.enrolled_history)
@@ -966,12 +1022,24 @@ class PersonFollowingSystem:
 
         # Route based on status
         if self.target.status == "TRACKING_ACTIVE":
-            result.update(self._process_active_tracking(tracks, color_frame, depth_frame, aux, current_time, H, W))
+            result.update(
+                self._process_active_tracking(
+                    tracks, color_frame, depth_frame, aux, current_time, H, W
+                )
+            )
         elif self.target.status == "SEARCHING":
-            result.update(self._process_searching(tracks, color_frame, depth_frame, aux, current_time, H, W))
+            result.update(
+                self._process_searching(
+                    tracks, color_frame, depth_frame, aux, current_time, H, W
+                )
+            )
         elif self.target.status == "SWITCHING":
             # SWITCHING only happens in greeting mode
-            result.update(self._process_switching(tracks, color_frame, depth_frame, aux, current_time, H, W))
+            result.update(
+                self._process_switching(
+                    tracks, color_frame, depth_frame, aux, current_time, H, W
+                )
+            )
 
         return result
 
@@ -988,7 +1056,7 @@ class PersonFollowingSystem:
     ) -> dict:
         """
         Process frame during SWITCHING mode.
-        
+
         Logic:
         - match >= 1        skip immediately (in history)
         - 3s + match == 0   accept (new person)
@@ -1018,11 +1086,11 @@ class PersonFollowingSystem:
             'current_bbox', 'time_remaining', etc.
         """
         ss = self.switch_state
-        
+
         if not ss.active:
             self.target.status = "INACTIVE"
             return {"switch_active": False, "reason": "not_active"}
-        
+
         # Update candidate bboxes with current track positions
         track_map = {t["track_id"]: t["bbox"] for t in self.all_tracks}
         for cand in ss.candidates:
@@ -1031,9 +1099,9 @@ class PersonFollowingSystem:
                 dist, _, _ = self._get_distance(cand["bbox"], depth_frame, aux)
                 if dist > 0.1:
                     cand["distance"] = dist
-        
+
         candidate = ss.get_current_candidate()
-        
+
         if candidate is None:
             ss.stop()
             self.target.status = "INACTIVE"
@@ -1044,30 +1112,31 @@ class PersonFollowingSystem:
                 "reason": "all_candidates_exhausted",
                 "switch_summary": ss.get_summary(),
             }
-        
+
         # Check timeout (3 seconds)
         if ss.is_timeout(timestamp):
             decision = ss.get_timeout_decision()
-            
-            if decision == 'accept':
+
+            if decision == "accept":
                 logger.info(
                     f"[SWITCH] #{ss.current_candidate_idx} timeout, no match found "
                     f"(valid={ss.valid_check_count}), ACCEPTING!"
                 )
 
-
                 x1, y1, x2, y2 = candidate["bbox"]
                 crop = color_frame[y1:y2, x1:x2]
-                mask, clothing_feat, clip_emb, mask_coverage, _ = self._extract_features(crop)
+                mask, clothing_feat, clip_emb, mask_coverage, _ = (
+                    self._extract_features(crop)
+                )
 
                 return self._accept_switch_candidate(
-                    candidate, timestamp,
+                    candidate,
+                    timestamp,
                     clothing_feat=clothing_feat,
                     clip_emb=clip_emb,
                     mask_coverage=mask_coverage,
                 )
 
-            
             else:  # skip_no_features
                 logger.warning(
                     f"[SWITCH] #{ss.current_candidate_idx} timeout, no valid features, skipping"
@@ -1088,7 +1157,7 @@ class PersonFollowingSystem:
                     "reason": "no_features",
                     "switch_summary": ss.get_summary(),
                 }
-        
+
         # Throttle check (~3 Hz)
         if not ss.should_check_now(timestamp):
             return {
@@ -1100,18 +1169,19 @@ class PersonFollowingSystem:
                 "time_remaining": ss.get_time_remaining(timestamp),
                 "switch_summary": ss.get_summary(),
             }
-        
+
         # Extract features
         x1, y1, x2, y2 = candidate["bbox"]
         crop = color_frame[y1:y2, x1:x2]
-        
-        mask, clothing_feat, clip_emb, mask_coverage, error_msg = self._extract_features(crop)
-        
-        features_valid = (
-            clothing_feat is not None and 
-            mask_coverage >= self.min_mask_coverage - 10
+
+        mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
+            self._extract_features(crop)
         )
-        
+
+        features_valid = (
+            clothing_feat is not None and mask_coverage >= self.min_mask_coverage - 10
+        )
+
         if not features_valid:
             ss.record_check(timestamp, False, False)
             return {
@@ -1120,22 +1190,24 @@ class PersonFollowingSystem:
                 "time_remaining": ss.get_time_remaining(timestamp),
                 "switch_summary": ss.get_summary(),
             }
-        
+
         # Check against history (using candidate's distance for closest bucket)
         is_match, c_sim, clip_sim = self._is_in_history(
             clothing_feat, clip_emb, candidate["distance"]
         )
         ss.record_check(timestamp, True, is_match, c_sim, clip_sim)
-        
+
         logger.info(
             f"[SWITCH] #{ss.current_candidate_idx} track={candidate['track_id']}: "
             f"C={c_sim:.3f} {'MATCH!' if is_match else 'no match'} "
             f"(check {ss.valid_check_count}, time_left={ss.get_time_remaining(timestamp):.1f}s)"
         )
-        
+
         # If ANY match found skip immediately
         if ss.should_skip_now():
-            logger.info(f"[SWITCH] #{ss.current_candidate_idx} FOUND IN HISTORY, skipping")
+            logger.info(
+                f"[SWITCH] #{ss.current_candidate_idx} FOUND IN HISTORY, skipping"
+            )
             has_more = ss.move_to_next_candidate(timestamp, "in_history")
             if not has_more:
                 ss.stop()
@@ -1153,7 +1225,7 @@ class PersonFollowingSystem:
                 "clothing_sim": c_sim,
                 "switch_summary": ss.get_summary(),
             }
-        
+
         # No match yet, continue checking
         return {
             "switch_active": True,
@@ -1166,8 +1238,8 @@ class PersonFollowingSystem:
         }
 
     def _accept_switch_candidate(
-        self, 
-        candidate: dict, 
+        self,
+        candidate: dict,
         timestamp: float,
         clothing_feat: dict = None,
         clip_emb: np.ndarray = None,
@@ -1197,24 +1269,24 @@ class PersonFollowingSystem:
             Result with 'switch_active': False, 'success': True, 'track_id', 'distance'.
         """
         ss = self.switch_state
-        
+
         # Initialize target
         self.target.initialize(candidate["track_id"], candidate["distance"], timestamp)
-        
+
         # If we have features, save them
         if clothing_feat is not None:
             bucket = self.target._get_bucket(candidate["distance"])
             self.target.save_feature(
                 bucket, "approaching", clothing_feat, clip_emb, mask_coverage, timestamp
             )
-        
+
         ss.stop()
         self.target.status = "TRACKING_ACTIVE"
-        
+
         # Auto save history
         if self.auto_save_history:
             self.save_history()
-        
+
         logger.info("=" * 50)
         logger.info("[SWITCH] SUCCESS!")
         logger.info(f"  New target: track_id={candidate['track_id']}")
@@ -1223,7 +1295,7 @@ class PersonFollowingSystem:
         logger.info(f"  Skipped (in history): {ss.skipped_in_history}")
         logger.info(f"  Skipped (no features): {ss.skipped_no_features}")
         logger.info("=" * 50)
-        
+
         return {
             "switch_active": False,
             "success": True,
@@ -1233,9 +1305,10 @@ class PersonFollowingSystem:
             "switch_summary": ss.get_summary(),
         }
 
-
-    # Active Tracking 
-    def _process_active_tracking(self, tracks, color_frame, depth_frame, aux, timestamp, H, W) -> dict:
+    # Active Tracking
+    def _process_active_tracking(
+        self, tracks, color_frame, depth_frame, aux, timestamp, H, W
+    ) -> dict:
         """
         Process frame during TRACKING_ACTIVE state.
 
@@ -1281,7 +1354,9 @@ class PersonFollowingSystem:
         x2, y2 = min(W, x2), min(H, y2)
         bbox = (x1, y1, x2, y2)
 
-        current_distance, cluster_pts, bbox_pts = self._get_distance(bbox, depth_frame, aux)
+        current_distance, cluster_pts, bbox_pts = self._get_distance(
+            bbox, depth_frame, aux
+        )
         direction = self.target.detect_movement_direction(current_distance, timestamp)
 
         should_save, bucket, save_dir = self.target.should_save_feature(
@@ -1291,11 +1366,17 @@ class PersonFollowingSystem:
         feature_saved = False
         if should_save:
             crop = color_frame[y1:y2, x1:x2]
-            mask, clothing_feat, clip_emb, mask_coverage, _ = self._extract_features(crop)
+            mask, clothing_feat, clip_emb, mask_coverage, _ = self._extract_features(
+                crop
+            )
             if clothing_feat:
-                if self.target.save_feature(bucket, save_dir, clothing_feat, clip_emb, mask_coverage, timestamp):
+                if self.target.save_feature(
+                    bucket, save_dir, clothing_feat, clip_emb, mask_coverage, timestamp
+                ):
                     feature_saved = True
-                    logger.info(f"Saved @{bucket:.1f}m [{save_dir}] mask:{mask_coverage:.1f}%")
+                    logger.info(
+                        f"Saved @{bucket:.1f}m [{save_dir}] mask:{mask_coverage:.1f}%"
+                    )
 
         self.target.frames_tracked += 1
         is_within_margin, _ = self.target.is_within_frame_margin(bbox, W, H)
@@ -1311,8 +1392,10 @@ class PersonFollowingSystem:
             "lidar_bbox_pts": bbox_pts,
         }
 
-    # Searching 
-    def _process_searching(self, tracks, color_frame, depth_frame, aux, timestamp, H, W) -> dict:
+    # Searching
+    def _process_searching(
+        self, tracks, color_frame, depth_frame, aux, timestamp, H, W
+    ) -> dict:
         """
         Process frame during SEARCHING state.
 
@@ -1343,7 +1426,6 @@ class PersonFollowingSystem:
             Search result with 'target_found', 'time_lost', 'candidates_checked',
             'bbox'/'distance' if re-identified, 'timeout_inactive' if timed out.
         """
-        
         # Search timeout only in greeting mode
         if self.operation_mode == "greeting":
             time_lost = self.target.get_time_lost(timestamp)
@@ -1362,7 +1444,7 @@ class PersonFollowingSystem:
                     "time_lost": time_lost,
                     "saved_to_history": saved,
                 }
-        
+
         self.all_candidates_info = []
         candidates = []
         track_bbox_map = {}
@@ -1382,7 +1464,9 @@ class PersonFollowingSystem:
             distance, _, _ = self._get_distance(bbox, depth_frame=depth_frame, aux=aux)
             if distance < 0.3:
                 continue
-            candidates.append({"track_id": track_id, "bbox": bbox, "distance": distance})
+            candidates.append(
+                {"track_id": track_id, "bbox": bbox, "distance": distance}
+            )
 
         if not candidates:
             self.target.mark_lost(timestamp)
@@ -1404,7 +1488,10 @@ class PersonFollowingSystem:
                     cand_info["bbox"] = track_bbox_map[tid]
                     self.all_candidates_info.append(cand_info)
             result = cached.copy()
-            if cached.get("target_found") and cached.get("matched_track_id") in track_bbox_map:
+            if (
+                cached.get("target_found")
+                and cached.get("matched_track_id") in track_bbox_map
+            ):
                 result["bbox"] = track_bbox_map[cached["matched_track_id"]]
             result["time_lost"] = self.target.get_time_lost(timestamp)
             result["throttled"] = True
@@ -1419,7 +1506,9 @@ class PersonFollowingSystem:
             crop = color_frame[y1:y2, x1:x2]
             query_distance = person["distance"]
 
-            mask, clothing_feat, clip_emb, mask_coverage, error_msg = self._extract_features(crop)
+            mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
+                self._extract_features(crop)
+            )
             if error_msg and "segmentation" in error_msg:
                 continue
             if clothing_feat is None:
@@ -1427,7 +1516,9 @@ class PersonFollowingSystem:
             if mask_coverage < self.min_mask_coverage - 10:
                 continue
 
-            ref_features = self.target.get_bucket_features_both_directions(query_distance)
+            ref_features = self.target.get_bucket_features_both_directions(
+                query_distance
+            )
             if not ref_features:
                 continue
 
@@ -1436,10 +1527,14 @@ class PersonFollowingSystem:
             clip_sims = []
 
             for ref in ref_features:
-                c_sim = self.clothing_matcher.compute_clothing_similarity(clothing_feat, ref["clothing"])
+                c_sim = self.clothing_matcher.compute_clothing_similarity(
+                    clothing_feat, ref["clothing"]
+                )
                 clothing_sims.append(c_sim)
                 if clip_emb is not None and ref.get("clip") is not None:
-                    clip_sim = self.clothing_matcher.compute_clip_similarity(clip_emb, ref["clip"])
+                    clip_sim = self.clothing_matcher.compute_clip_similarity(
+                        clip_emb, ref["clip"]
+                    )
                     clip_sims.append(clip_sim)
 
             best_clothing_sim = max(clothing_sims) if clothing_sims else 0
@@ -1448,20 +1543,24 @@ class PersonFollowingSystem:
             passed_clothing = best_clothing_sim >= self.clothing_threshold
 
             if self.use_clip:
-                passed_clip = best_clip_sim >= self.clip_threshold if clip_available else False
+                passed_clip = (
+                    best_clip_sim >= self.clip_threshold if clip_available else False
+                )
             else:
                 passed_clip = True
 
-            results.append({
-                "person": person,
-                "clothing_sim": best_clothing_sim,
-                "clip_sim": best_clip_sim,
-                "clip_available": clip_available,
-                "mask_coverage": mask_coverage,
-                "closest_bucket": closest_bucket,
-                "passed_clothing": passed_clothing,
-                "passed_clip": passed_clip,
-            })
+            results.append(
+                {
+                    "person": person,
+                    "clothing_sim": best_clothing_sim,
+                    "clip_sim": best_clip_sim,
+                    "clip_available": clip_available,
+                    "mask_coverage": mask_coverage,
+                    "closest_bucket": closest_bucket,
+                    "passed_clothing": passed_clothing,
+                    "passed_clip": passed_clip,
+                }
+            )
 
             cand_info = {
                 "track_id": person["track_id"],
@@ -1491,12 +1590,17 @@ class PersonFollowingSystem:
             return result
 
         if self.use_clip:
-            clip_passed = [r for r in stage1_passed if r["passed_clip"] and r["clip_available"]]
+            clip_passed = [
+                r for r in stage1_passed if r["passed_clip"] and r["clip_available"]
+            ]
             if not clip_passed:
                 self.target.mark_lost(timestamp)
                 clip_available = [r for r in stage1_passed if r["clip_available"]]
-                best = max(clip_available, key=lambda r: r["clip_sim"]) if clip_available else \
-                    max(stage1_passed, key=lambda r: r["clothing_sim"])
+                best = (
+                    max(clip_available, key=lambda r: r["clip_sim"])
+                    if clip_available
+                    else max(stage1_passed, key=lambda r: r["clothing_sim"])
+                )
                 result = {
                     "target_found": False,
                     "stage": "no_clip_match",
@@ -1520,7 +1624,7 @@ class PersonFollowingSystem:
         return {
             "target_found": True,
             "bbox": best["person"]["bbox"],
-            "distance": best["person"]["distance"], 
+            "distance": best["person"]["distance"],
             "matched_track_id": best["person"]["track_id"],
             "stage": "verified",
             "clothing_sim": best["clothing_sim"],
@@ -1528,7 +1632,6 @@ class PersonFollowingSystem:
             "bucket": best["closest_bucket"],
             "time_lost": self.target.get_time_lost(timestamp),
         }
-
 
     def enroll_target(self, color_frame, depth_frame=None, aux=None) -> bool:
         """
@@ -1582,7 +1685,9 @@ class PersonFollowingSystem:
         x1, y1, x2, y2 = target["bbox"]
         crop = color_frame[y1:y2, x1:x2]
 
-        mask, clothing_feat, clip_emb, mask_coverage, error_msg = self._extract_features(crop)
+        mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
+            self._extract_features(crop)
+        )
         if error_msg:
             logger.warning(f"Feature extraction failed: {error_msg}")
         if clothing_feat is None:
@@ -1602,7 +1707,9 @@ class PersonFollowingSystem:
         )
 
         if saved:
-            logger.info(f"Target enrolled: track_id={target['track_id']}, dist={target['distance']:.2f}m")
+            logger.info(
+                f"Target enrolled: track_id={target['track_id']}, dist={target['distance']:.2f}m"
+            )
             return True
         return False
 
@@ -1627,19 +1734,21 @@ class PersonFollowingSystem:
         """
         status = {
             "status": self.target.status,
-            "operation_mode": self.operation_mode,  
+            "operation_mode": self.operation_mode,
             "track_id": self.target.track_id,
             "features": self.target.get_total_features(),
             "quality": self.target.get_quality_summary(),
             "approach_distance": self.approach_distance,
         }
-        
+
         # Only include greeting-specific info in greeting mode
         if self.operation_mode == "greeting":
             status["history_size"] = len(self.enrolled_history)
             status["max_history_size"] = self.max_history_size
             status["switch_active"] = self.switch_state.active
-            status["switch_summary"] = self.switch_state.get_summary() if self.switch_state.active else None
+            status["switch_summary"] = (
+                self.switch_state.get_summary() if self.switch_state.active else None
+            )
             status["searching_timeout"] = self.searching_timeout
 
         return status  # FIX: Added missing return statement
