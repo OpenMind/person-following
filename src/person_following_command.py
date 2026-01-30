@@ -2,11 +2,6 @@
 """
 HTTP control API for person-following system.
 
-UPDATES:
-- Added switch command
-- Added clear_history, delete_history, save_history, load_history commands
-- Added set_max_history command with params support
-
 Endpoints
 ---------
 GET  /healthz                 -> {"ok": true}
