@@ -18,7 +18,7 @@ services:
       - PROJECT_ROOT=/opt/person_following
       - DISPLAY_ENABLED=${DISPLAY_ENABLED:-false}
       - HF_TOKEN=${HF_TOKEN:-}  # optional, for HuggingFace models
-      - DEVICE_TYPE=${DEVICE_TYPE:-unitree_go2} 
+      - DEVICE_TYPE=${DEVICE_TYPE:-unitree_go2}
 
     volumes:
       # USB devices for RealSense camera
