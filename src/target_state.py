@@ -7,12 +7,14 @@ Stores clothing features and OpenCLIP embeddings for person re-identification.
 import logging
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+OperationMode = Literal["greeting", "following"]
 
 
 @dataclass
@@ -41,6 +43,8 @@ class TargetState:
 
     Attributes
     ----------
+    operation_mode : str
+        Current operation mode ('greeting' or 'following').
     track_id : int or None
         Current tracker ID of the target.
     base_distance : float
@@ -51,7 +55,7 @@ class TargetState:
         Nested dictionary storing features by bucket and direction.
         Structure: {bucket: {direction: {'clothing': dict, 'clip': array, 'mask_coverage': float}}}
     status : str
-        Current tracking status ('INACTIVE', 'TRACKING_ACTIVE', 'SEARCHING').
+        Current tracking status ('INACTIVE', 'TRACKING_ACTIVE', 'SEARCHING', 'SWITCHING', 'APPROACHED').
     frames_tracked : int
         Total frames where target was successfully tracked.
     frames_lost : int
@@ -74,6 +78,9 @@ class TargetState:
 
     # Frame margin
     FRAME_MARGIN_LR = 20  # pixels
+
+    # === NEW: Operation Mode ===
+    operation_mode: OperationMode = "greeting"
 
     # === State Variables ===
     track_id: Optional[int] = None
@@ -100,8 +107,7 @@ class TargetState:
         """
         Initialize target state at enrollment.
 
-        Sets up the initial state when a new target is enrolled, including
-        the track ID, base distance for bucketing, and initial feature storage.
+        Sets up initial state when a new target is enrolled.
 
         Parameters
         ----------
