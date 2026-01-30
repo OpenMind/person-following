@@ -21,11 +21,10 @@ services:
       - DEVICE_TYPE=${DEVICE_TYPE:-unitree_go2} 
 
     volumes:
-      # X11 for display (optional, for --display flag)
-      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # USB devices for RealSense camera
+      - /dev:/dev
       - ./model:/opt/person_following/model:ro
-      # Engine files (optional, if mounting from host)
-      # - ./engine:/opt/person_following/engine:ro
+
 
     # Default: runs the ROS2 launch file (display disabled by default)
     # To enable display: DISPLAY_ENABLED=true docker-compose up
