@@ -15,6 +15,7 @@ from geometry_msgs.msg import PoseStamped, Twist
 from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
+
 from unitree_api.msg import GreetingStatus
 
 
@@ -100,7 +101,9 @@ class PersonFollower(Node):
         self.handshake_publisher = self.create_publisher(
             GreetingStatus, "/greeting_handshake", 10
         )
-        self.state_publisher = self.create_publisher(String, "/person_follower/state", 10)
+        self.state_publisher = self.create_publisher(
+            String, "/person_follower/state", 10
+        )
 
     def _setup_subscribers(self):
         """Create ROS subscribers."""
@@ -192,7 +195,9 @@ class PersonFollower(Node):
             Greeting status message (code=2 means conversation finished).
         """
         if msg.code == HandshakeCode.SWITCH:
-            self.get_logger().info("Received SWITCH (2) from OM1 - conversation finished")
+            self.get_logger().info(
+                "Received SWITCH (2) from OM1 - conversation finished"
+            )
             with self.state_lock:
                 if self.state == FollowerState.GREETING_IN_PROGRESS:
                     self._transition_to(FollowerState.SWITCHING)
@@ -240,7 +245,9 @@ class PersonFollower(Node):
             self.last_angle_error = 0.0
             self.last_msg_time = None
 
-        self.get_logger().info(f"State transition: {old_state.value} → {new_state.value}")
+        self.get_logger().info(
+            f"State transition: {old_state.value} → {new_state.value}"
+        )
 
     def _handle_idle_state(self):
         """Handle IDLE state - wait for tracking system to be ready."""
@@ -292,7 +299,9 @@ class PersonFollower(Node):
             return
 
         if mode == "SEARCHING":
-            self.get_logger().info("Tracking lost person, waiting for re-identification...")
+            self.get_logger().info(
+                "Tracking lost person, waiting for re-identification..."
+            )
         elif mode == "INACTIVE" and self.last_tracking_mode == "SEARCHING":
             self.get_logger().info("Re-identification failed, starting search")
             self._stop_robot()
@@ -353,7 +362,9 @@ class PersonFollower(Node):
                 )
                 self._call_switch_command()
             else:
-                self.get_logger().info("Pause complete, no one visible - rotating again...")
+                self.get_logger().info(
+                    "Pause complete, no one visible - rotating again..."
+                )
                 self.search_phase = "rotate"
                 self.search_rotation_start_time = None
 
@@ -417,14 +428,18 @@ class PersonFollower(Node):
         linear_vel = p_lin + d_lin
         self.last_distance_error = distance_error
 
-        angular_vel = max(-self.max_angular_speed, min(angular_vel, self.max_angular_speed))
+        angular_vel = max(
+            -self.max_angular_speed, min(angular_vel, self.max_angular_speed)
+        )
 
         if abs(angle_error) > self.angle_tolerance:
             cmd.angular.z = angular_vel
             cmd.linear.x = 0.0
         else:
             cmd.angular.z = angular_vel
-            linear_vel = max(-self.max_linear_speed, min(linear_vel, self.max_linear_speed))
+            linear_vel = max(
+                -self.max_linear_speed, min(linear_vel, self.max_linear_speed)
+            )
             if abs(distance_error) < self.distance_tolerance:
                 linear_vel = 0.0
             cmd.linear.x = linear_vel
