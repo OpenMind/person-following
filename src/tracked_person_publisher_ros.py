@@ -275,7 +275,7 @@ def parse_args():
     p.add_argument(
         "--max-history-size",
         type=int,
-        default=3,
+        default=1,
         help="Maximum number of greeted persons to remember (default: 3)",
     )
     p.add_argument(
