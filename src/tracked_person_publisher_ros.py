@@ -276,7 +276,7 @@ def parse_args():
         "--max-history-size",
         type=int,
         default=1,
-        help="Maximum number of greeted persons to remember (default: 3)",
+        help="Maximum number of greeted persons to remember (default: 1)",
     )
     p.add_argument(
         "--history-file",
