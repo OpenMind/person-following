@@ -1,3 +1,4 @@
+
 # Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Jazzy)
 FROM nvcr.io/nvidia/pytorch:25.10-py3
 
@@ -7,9 +8,10 @@ ENV DEBIAN_FRONTEND=noninteractive \
     ROS_DISTRO=jazzy \
     PROJECT_ROOT=/opt/person_following \
     VIRTUAL_ENV=/opt/venv \
+    UV_PROJECT_ENVIRONMENT=/opt/venv \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PYTHONPATH=""
+    PATH=/opt/venv/bin:/usr/local/bin:$PATH
+
 
 # Prefer the UCX/UCC that ships in the base image (HPC-X), then CUDA.
 ENV LD_LIBRARY_PATH=/opt/hpcx/ucx/lib:/opt/hpcx/ucc/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH} \
@@ -20,24 +22,31 @@ RUN if [ -d /opt/hpcx/ucx/lib ] && [ -d /opt/hpcx/ucc/lib ]; then \
       printf '%s\n' /opt/hpcx/ucx/lib /opt/hpcx/ucc/lib > /etc/ld.so.conf.d/hpcx.conf && ldconfig; \
     fi
 
-# Enable universe (Ubuntu 24.04 uses deb822 sources file in many images)
-RUN set -eux; \
-    if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then \
-      sed -i 's/^Components: .*/Components: main restricted universe multiverse/' /etc/apt/sources.list.d/ubuntu.sources; \
-    fi; \
-    rm -rf /var/lib/apt/lists/*
+COPY --from=docker.io/astral/uv:latest /uv /uvx /usr/local/bin/
 
 # System dependencies
 RUN set -eux; \
     apt-get update -o Acquire::Retries=5; \
     apt-get install -y --no-install-recommends --fix-missing \
-      ca-certificates curl \
-      git build-essential cmake pkg-config ninja-build \
-      python3-venv python3-pip python3-dev \
-      python3-requests python3-tqdm \
-      libssl-dev libusb-1.0-0-dev libudev-dev \
-      libgtk-3-dev libglfw3-dev libgl1-mesa-dev libglu1-mesa-dev \
-      ffmpeg udev \
+      ca-certificates \
+      curl \
+      git build-essential \
+      cmake \
+      pkg-config \
+      ninja-build \
+      python3-venv \
+      python3-dev \
+      python3-requests \
+      python3-tqdm \
+      libssl-dev \
+      libusb-1.0-0-dev \
+      libudev-dev \
+      libgtk-3-dev \
+      libglfw3-dev \
+      libgl1-mesa-dev \
+      libglu1-mesa-dev \
+      ffmpeg \
+      udev \
       python3-opencv \
     ; \
     rm -rf /var/lib/apt/lists/*
@@ -68,30 +77,19 @@ RUN set -eux; \
     rosdep update; \
     rm -rf /var/lib/apt/lists/*
 
-# Copy project
 WORKDIR ${PROJECT_ROOT}
+
+# Cache deps layer: copy only lock + pyproject first
+# (If you don't have uv.lock, remove it from this COPY and drop --locked below.)
+COPY pyproject.toml uv.lock ./
+
+# Create venv WITH system site-packages, then install deps from pyproject
+RUN uv venv "${VIRTUAL_ENV}" --python python3 --system-site-packages && \
+    uv sync --locked --no-install-project --all-extras
+
+# Now copy the rest of the project
 COPY . ${PROJECT_ROOT}
 
-ENV VIRTUAL_ENV=/opt/venv
-ENV PATH=/opt/venv/bin:${PATH}
-
-RUN python3 -m venv ${VIRTUAL_ENV} --system-site-packages && \
-    ${VIRTUAL_ENV}/bin/python -m pip install -U pip setuptools wheel packaging && \
-    \
-    # Install your deps (may temporarily pull numpy 2.x)
-    ${VIRTUAL_ENV}/bin/pip install --no-cache-dir \
-      pycuda \
-      ultralytics \
-      onnx \
-      onnxruntime \
-      open-clip-torch \
-      boxmot && \
-    \
-    (${VIRTUAL_ENV}/bin/pip uninstall -y opencv-python opencv-python-headless opencv-contrib-python || true) && \
-    \
-    ${VIRTUAL_ENV}/bin/pip install --no-cache-dir --force-reinstall --no-deps numpy==1.26.4 && \
-    \
-    ${VIRTUAL_ENV}/bin/python -c "import numpy, cv2; print('numpy:', numpy.__version__, numpy.__file__); print('cv2:', cv2.__version__)"
 
 # Dirs
 RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/launch && \
@@ -108,4 +106,4 @@ RUN printf '%s\n' \
   > /entrypoint.sh && chmod +x /entrypoint.sh
 
 ENTRYPOINT ["/entrypoint.sh"]
-CMD ["ros2", "launch", "/opt/person_following/launch/person_following.launch.py"]
+CMD ["ros2", "launch", "/opt/person_following/launch/person_following_launch.py"]
