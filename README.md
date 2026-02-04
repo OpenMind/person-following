@@ -88,6 +88,13 @@ docker run \
 
 ### Option 2: Local Installation
 
+##### Using UV Install for virtual env
+```bash
+uv venv --system-site-packages
+uv sync
+source .venv/bin/activate
+```
+
 ##### Build librealsense from Source
 ```bash
 # System prerequisites
