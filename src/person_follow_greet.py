@@ -8,6 +8,7 @@ import threading
 import time
 from enum import Enum
 from typing import Optional
+from uuid import uuid4
 
 import rclpy
 import requests
@@ -16,7 +17,8 @@ from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from unitree_api.msg import GreetingStatus
+from zenoh_msgs import PersonGreetingStatus, open_zenoh_session, prepare_header
+from zenoh_msgs import String as ZenohString
 
 
 class FollowerState(Enum):
@@ -30,8 +32,9 @@ class FollowerState(Enum):
 
 
 class HandshakeCode:
-    """Handshake codes for /greeting_handshake topic."""
+    """Status codes for /om/person_greeting topic (matching OM1 PersonGreetingStatus)."""
 
+    APPROACHING = 0
     APPROACHED = 1
     SWITCH = 2
 
@@ -50,6 +53,17 @@ class PersonFollower(Node):
         self._setup_publishers()
         self._setup_subscribers()
         self._init_state()
+
+        # Zenoh session for OM1 greeting
+        try:
+            self.zenoh_session = open_zenoh_session()
+            self.zenoh_sub = self.zenoh_session.declare_subscriber(
+                "om/person_greeting", self._zenoh_person_greeting_callback
+            )
+            self.get_logger().info("Zenoh session for om/person_greeting initialized.")
+        except Exception as e:
+            self.zenoh_session = None
+            self.get_logger().error(f"Zenoh session error: {e}")
 
         self.state_machine_timer = self.create_timer(0.1, self.state_machine_tick)
 
@@ -96,17 +110,14 @@ class PersonFollower(Node):
         self.cmd_base_url = f"http://{self.cmd_host}:{self.cmd_port}"
 
     def _setup_publishers(self):
-        """Create ROS publishers."""
+        """Create ROS publishers (except OM1 greeting, which uses Zenoh)."""
         self.cmd_vel_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
-        self.handshake_publisher = self.create_publisher(
-            GreetingStatus, "/greeting_handshake", 10
-        )
         self.state_publisher = self.create_publisher(
             String, "/person_follower/state", 10
         )
 
     def _setup_subscribers(self):
-        """Create ROS subscribers."""
+        """Create ROS subscribers (except OM1 greeting, which uses Zenoh)."""
         self.status_subscription = self.create_subscription(
             String, "/tracked_person/status", self.status_callback, 10
         )
@@ -115,9 +126,6 @@ class PersonFollower(Node):
             "/person_following_robot/tracked_person/position",
             self.position_callback,
             10,
-        )
-        self.handshake_subscription = self.create_subscription(
-            GreetingStatus, "/greeting_handshake", self.handshake_callback, 10
         )
 
     def _init_state(self):
@@ -185,23 +193,20 @@ class PersonFollower(Node):
         cmd_vel = self.calculate_velocity(msg, dt)
         self.cmd_vel_publisher.publish(cmd_vel)
 
-    def handshake_callback(self, msg: GreetingStatus):
-        """
-        Handle incoming handshake messages from OM1.
-
-        Parameters
-        ----------
-        msg : unitree_api.msg.GreetingStatus
-            Greeting status message (code=2 means conversation finished).
-        """
-        if msg.code == HandshakeCode.SWITCH:
-            self.get_logger().info(
-                "Received SWITCH (2) from OM1 - conversation finished"
-            )
-            with self.state_lock:
-                if self.state == FollowerState.GREETING_IN_PROGRESS:
-                    self._transition_to(FollowerState.SWITCHING)
-                    self._call_switch_command()
+    def _zenoh_person_greeting_callback(self, data):
+        """Handle incoming PersonGreetingStatus messages from Zenoh (om/person_greeting)."""
+        try:
+            msg = PersonGreetingStatus.deserialize(data.payload.to_bytes())
+            if msg.status == HandshakeCode.SWITCH:
+                self.get_logger().info(
+                    f"[Zenoh] Received SWITCH (2) from OM1 - conversation finished (request_id: {msg.request_id.data})"
+                )
+                with self.state_lock:
+                    if self.state == FollowerState.GREETING_IN_PROGRESS:
+                        self._transition_to(FollowerState.SWITCHING)
+                        self._call_switch_command()
+        except Exception as e:
+            self.get_logger().error(f"Zenoh callback error: {e}")
 
     def state_machine_tick(self):
         """Main state machine tick called periodically by timer."""
@@ -458,13 +463,24 @@ class PersonFollower(Node):
         self.cmd_vel_publisher.publish(Twist())
 
     def _publish_approached(self):
-        """Publish APPROACHED handshake to OM1."""
-        msg = GreetingStatus()
-        msg.header.stamp = self.get_clock().now().to_msg()
-        msg.header.frame_id = "person_follower"
-        msg.code = HandshakeCode.APPROACHED
-        self.handshake_publisher.publish(msg)
-        self.get_logger().info("Published APPROACHED (1) to OM1")
+        """Publish APPROACHED status to OM1 via Zenoh om/person_greeting."""
+        if not self.zenoh_session:
+            self.get_logger().error(
+                "Zenoh session not available for publishing APPROACHED."
+            )
+            return
+        request_id = str(uuid4())
+        msg = PersonGreetingStatus(
+            header=prepare_header(),
+            request_id=ZenohString(data=request_id),
+            status=HandshakeCode.APPROACHED,
+        )
+        self.zenoh_session.put("om/person_greeting", msg.serialize())
+        # Small delay to ensure message is sent before continuing
+        time.sleep(0.1)
+        self.get_logger().info(
+            f"[Zenoh] Published APPROACHED (1) to om/person_greeting (request_id: {request_id})"
+        )
 
     def _call_switch_command(self) -> bool:
         """
@@ -543,6 +559,12 @@ def main(args=None):
     finally:
         person_follower.cmd_vel_publisher.publish(Twist())
         person_follower.get_logger().info("Shutting down, robot stopped")
+
+        # Close Zenoh session
+        if person_follower.zenoh_session:
+            person_follower.zenoh_session.close()
+            person_follower.get_logger().info("Zenoh session closed")
+
         person_follower.destroy_node()
         rclpy.shutdown()
 
