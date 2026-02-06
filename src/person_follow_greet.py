@@ -13,6 +13,7 @@ from uuid import uuid4
 import rclpy
 import requests
 from geometry_msgs.msg import PoseStamped, Twist
+from om_api.msg import Paths
 from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
@@ -45,6 +46,9 @@ class PersonFollower(Node):
     Uses PD control for smooth following and implements search behavior when no person is found.
     """
 
+    PATH_ANGLES = [60, 45, 30, 15, 0, -15, -30, -45, -60, 180]
+    VALID_FORWARD_PATHS = [4]
+
     def __init__(self):
         super().__init__("person_follower")
 
@@ -54,7 +58,6 @@ class PersonFollower(Node):
         self._setup_subscribers()
         self._init_state()
 
-        # Zenoh session for OM1 greeting
         try:
             self.zenoh_session = open_zenoh_session()
             self.zenoh_sub = self.zenoh_session.declare_subscriber(
@@ -99,7 +102,9 @@ class PersonFollower(Node):
         self.angular_kp = self.get_parameter("angular_kp").value
         self.angular_kd = self.get_parameter("angular_kd").value
         self.distance_tolerance = self.get_parameter("distance_tolerance").value
-        self.angle_tolerance = self.get_parameter("angle_tolerance").value
+        self.angle_tolerance = self.get_parameter("angle_tolerance").valueracking System │         │       OM1        │                      │
+│  │  (Python + YOLO) │         │  (Conversation)  │                      │
+│  └────────┬────────
         self.timeout = self.get_parameter("timeout").value
         self.cmd_host = self.get_parameter("cmd_host").value
         self.cmd_port = self.get_parameter("cmd_port").value
@@ -110,14 +115,14 @@ class PersonFollower(Node):
         self.cmd_base_url = f"http://{self.cmd_host}:{self.cmd_port}"
 
     def _setup_publishers(self):
-        """Create ROS publishers (except OM1 greeting, which uses Zenoh)."""
+        """Create ROS publishers."""
         self.cmd_vel_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
         self.state_publisher = self.create_publisher(
             String, "/person_follower/state", 10
         )
 
     def _setup_subscribers(self):
-        """Create ROS subscribers (except OM1 greeting, which uses Zenoh)."""
+        """Create ROS subscribers."""
         self.status_subscription = self.create_subscription(
             String, "/tracked_person/status", self.status_callback, 10
         )
@@ -126,6 +131,9 @@ class PersonFollower(Node):
             "/person_following_robot/tracked_person/position",
             self.position_callback,
             10,
+        )
+        self.paths_subscription = self.create_subscription(
+            Paths, "/om/paths", self.paths_callback, 10
         )
 
     def _init_state(self):
@@ -150,6 +158,11 @@ class PersonFollower(Node):
         self.search_phase = "rotate"
         self.search_pause_start_time: Optional[float] = None
 
+        self.safe_paths: list[int] = list(range(10))
+        self.blocked_paths: set[int] = set()
+        self.last_paths_time: Optional[float] = None
+        self.paths_timeout = 1.0
+
     def status_callback(self, msg: String):
         """
         Handle incoming tracking status updates.
@@ -164,6 +177,25 @@ class PersonFollower(Node):
             self.tracking_status_received = True
         except json.JSONDecodeError as e:
             self.get_logger().error(f"Failed to parse tracking status: {e}")
+
+    def paths_callback(self, msg: Paths):
+        """
+        Handle incoming path availability updates from obstacle detection.
+
+        Parameters
+        ----------
+        msg : om_api.msg.Paths
+            Message containing list of safe path indices.
+        """
+        self.safe_paths = list(msg.paths)
+        self.blocked_paths = set(msg.blocked_by_obstacle_idx) | set(
+            msg.blocked_by_hazard_idx
+        )
+        self.last_paths_time = time.time()
+        self.get_logger().debug(
+            f"Paths update: safe={self.safe_paths}, blocked={self.blocked_paths}",
+            throttle_duration_sec=1.0,
+        )
 
     def position_callback(self, msg: PoseStamped):
         """
@@ -394,7 +426,10 @@ class PersonFollower(Node):
 
     def calculate_velocity(self, pose_msg: PoseStamped, dt: float) -> Twist:
         """
-        Calculate velocity commands using PD control.
+        Calculate velocity commands using PD control with obstacle avoidance.
+
+        Checks if the path toward the person is safe using /om/paths data.
+        If blocked, searches for an alternative safe path or stops.
 
         Parameters
         ----------
@@ -415,9 +450,36 @@ class PersonFollower(Node):
 
         distance = math.sqrt(x**2 + z**2)
         angle = math.atan2(x, z)
+        angle_deg = math.degrees(angle)
+
+        close_to_person = distance < (self.target_distance + 0.7)
+        if close_to_person:
+            path_safe = True
+            alternative_angle = None
+        else:
+            path_safe, alternative_angle = self._check_path_safety(angle_deg)
 
         distance_error = distance - self.target_distance
         angle_error = angle
+
+        if not path_safe:
+            if alternative_angle is not None:
+                alt_angle_rad = math.radians(alternative_angle)
+                angle_error = alt_angle_rad
+                self.get_logger().info(
+                    f"[OBSTACLE] Path blocked at {angle_deg:.1f}°, "
+                    f"redirecting to safe path at {alternative_angle:.1f}°",
+                    throttle_duration_sec=1.0,
+                )
+            else:
+                self.get_logger().warn(
+                    f"[OBSTACLE] No safe path to person at {angle_deg:.1f}°, "
+                    "switching to search for another person",
+                    throttle_duration_sec=1.0,
+                )
+                self._call_switch_command()
+                self._transition_to(FollowerState.SEARCHING)
+                return cmd
 
         p_ang = -self.angular_kp * angle_error
         d_ang = 0.0
@@ -441,22 +503,116 @@ class PersonFollower(Node):
             cmd.angular.z = angular_vel
             cmd.linear.x = 0.0
         else:
-            cmd.angular.z = angular_vel
-            linear_vel = max(
-                -self.max_linear_speed, min(linear_vel, self.max_linear_speed)
-            )
-            if abs(distance_error) < self.distance_tolerance:
-                linear_vel = 0.0
-            cmd.linear.x = linear_vel
+            if path_safe:
+                cmd.angular.z = angular_vel
+                linear_vel = max(
+                    -self.max_linear_speed, min(linear_vel, self.max_linear_speed)
+                )
+                if abs(distance_error) < self.distance_tolerance:
+                    linear_vel = 0.0
+                cmd.linear.x = linear_vel
+            else:
+                cmd.angular.z = angular_vel
+                cmd.linear.x = 0.0
 
+        safe_status = "SAFE" if path_safe else "BLOCKED"
         self.get_logger().info(
             f"[APPROACHING] Dist: {distance:.2f}m Err:{distance_error:.2f}, "
-            f"Angle: {math.degrees(angle):.1f}° | "
+            f"Angle: {angle_deg:.1f}° [{safe_status}] | "
             f"Cmd: lin={cmd.linear.x:.2f}, ang={cmd.angular.z:.2f}",
             throttle_duration_sec=0.5,
         )
 
         return cmd
+
+    def _check_path_safety(self, angle_deg: float) -> tuple[bool, Optional[float]]:
+        """
+        Check if the path at the given angle is safe and find alternatives if not.
+
+        Parameters
+        ----------
+        angle_deg : float
+            The angle to the target in degrees (0° = forward, positive = left).
+
+        Returns
+        -------
+        tuple[bool, Optional[float]]
+            (is_safe, alternative_angle)
+            - is_safe: True if direct path is safe
+            - alternative_angle: If blocked, the nearest safe alternative angle in degrees,
+              or None if no safe path exists
+        """
+        if self.last_paths_time is not None:
+            if time.time() - self.last_paths_time > self.paths_timeout:
+                self.get_logger().warn(
+                    "Path data stale, assuming unsafe", throttle_duration_sec=2.0
+                )
+                return False, None
+
+        target_path_idx = self._angle_to_path_index(angle_deg)
+
+        if target_path_idx in self.safe_paths:
+            return True, None
+
+        alternative_idx = self._find_nearest_safe_path(target_path_idx)
+
+        if alternative_idx is not None:
+            alternative_angle = self.PATH_ANGLES[alternative_idx]
+            return False, alternative_angle
+
+        return False, None
+
+    def _angle_to_path_index(self, angle_deg: float) -> int:
+        """
+        Convert an angle in degrees to the nearest path index.
+
+        Parameters
+        ----------
+        angle_deg : float
+            Angle in degrees (0° = forward, positive = left, negative = right).
+
+        Returns
+        -------
+        int
+            Path index (3, 4, or 5 for forward directions).
+        """
+        min_diff = float("inf")
+        closest_idx = 4
+
+        for idx in self.VALID_FORWARD_PATHS:
+            diff = abs(self.PATH_ANGLES[idx] - angle_deg)
+            if diff < min_diff:
+                min_diff = diff
+                closest_idx = idx
+
+        return closest_idx
+
+    def _find_nearest_safe_path(self, blocked_idx: int) -> Optional[int]:
+        """
+        Find the nearest safe path to a blocked path index.
+
+        Searches outward from the blocked index within valid forward paths (3, 4, 5).
+
+        Parameters
+        ----------
+        blocked_idx : int
+            The index of the blocked path.
+
+        Returns
+        -------
+        Optional[int]
+            The index of the nearest safe path, or None if all paths are blocked.
+        """
+        for offset in range(1, len(self.VALID_FORWARD_PATHS)):
+            left_idx = blocked_idx - offset
+            if left_idx in self.VALID_FORWARD_PATHS and left_idx in self.safe_paths:
+                return left_idx
+
+            right_idx = blocked_idx + offset
+            if right_idx in self.VALID_FORWARD_PATHS and right_idx in self.safe_paths:
+                return right_idx
+
+        return None
 
     def _stop_robot(self):
         """Publish zero velocity to stop the robot."""
@@ -476,7 +632,6 @@ class PersonFollower(Node):
             status=HandshakeCode.APPROACHED,
         )
         self.zenoh_session.put("om/person_greeting", msg.serialize())
-        # Small delay to ensure message is sent before continuing
         time.sleep(0.1)
         self.get_logger().info(
             f"[Zenoh] Published APPROACHED (1) to om/person_greeting (request_id: {request_id})"
@@ -560,7 +715,6 @@ def main(args=None):
         person_follower.cmd_vel_publisher.publish(Twist())
         person_follower.get_logger().info("Shutting down, robot stopped")
 
-        # Close Zenoh session
         if person_follower.zenoh_session:
             person_follower.zenoh_session.close()
             person_follower.get_logger().info("Zenoh session closed")
