@@ -102,9 +102,7 @@ class PersonFollower(Node):
         self.angular_kp = self.get_parameter("angular_kp").value
         self.angular_kd = self.get_parameter("angular_kd").value
         self.distance_tolerance = self.get_parameter("distance_tolerance").value
-        self.angle_tolerance = self.get_parameter("angle_tolerance").valueracking System │         │       OM1        │                      │
-│  │  (Python + YOLO) │         │  (Conversation)  │                      │
-│  └────────┬────────
+        self.angle_tolerance = self.get_parameter("angle_tolerance").value
         self.timeout = self.get_parameter("timeout").value
         self.cmd_host = self.get_parameter("cmd_host").value
         self.cmd_port = self.get_parameter("cmd_port").value
