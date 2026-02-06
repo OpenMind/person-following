@@ -6,27 +6,34 @@ services:
     image: openmindagi/person-following:latest
     container_name: person-following-system
     runtime: nvidia
-    network_mode: host  # Required for ROS communication with other containers
+    network_mode: host
+    privileged: true
     restart: unless-stopped
 
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
       - ROS_DOMAIN_ID=${ROS_DOMAIN_ID:-0}
+      - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - DISPLAY=${DISPLAY:-:0}
       - QT_X11_NO_MITSHM=1
       - PROJECT_ROOT=/opt/person_following
       - DISPLAY_ENABLED=${DISPLAY_ENABLED:-false}
-      - HF_TOKEN=${HF_TOKEN:-}  # optional, for HuggingFace models
+      - HF_TOKEN=${HF_TOKEN:-}
       - DEVICE_TYPE=${DEVICE_TYPE:-unitree_go2}
 
     volumes:
-      # USB devices for RealSense camera
       - /dev:/dev
+      - /run/udev:/run/udev:ro
+      - /sys:/sys:ro
       - ./model:/opt/person_following/model:ro
+      - ./engine:/opt/person_following/engine:ro
 
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-    # Default: runs the ROS2 launch file (display disabled by default)
-    # To enable display: DISPLAY_ENABLED=true docker-compose up
-    # Also run: xhost +local:docker (on host)
-    command: ros2 launch /opt/person_following/launch/person_following_launch.py display:=${DISPLAY_ENABLED:-false}
+    # Default: runs the Go2 greeting launch file
+    command: ros2 launch /opt/person_following/launch/go2_greeting_launch.py display:=${DISPLAY_ENABLED:-false}

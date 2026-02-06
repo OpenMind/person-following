@@ -12,6 +12,8 @@ dependencies = [
     "onnxruntime",
     "open-clip-torch",
     "boxmot",
+    "eclipse-zenoh",
+    "pycdr2",
 ]
 
 [project.optional-dependencies]

@@ -69,6 +69,7 @@ RUN set -eux; \
       ros-jazzy-diagnostic-updater \
       ros-jazzy-launch \
       ros-jazzy-launch-ros \
+      ros-jazzy-rmw-cyclonedds-cpp \
       python3-rosdep \
       python3-colcon-common-extensions \
       python3-vcstool \
@@ -90,17 +91,22 @@ RUN uv venv "${VIRTUAL_ENV}" --python python3 --system-site-packages && \
 # Now copy the rest of the project
 COPY . ${PROJECT_ROOT}
 
+# Build ROS2 packages (om_api, unitree_api)
+RUN source /opt/ros/jazzy/setup.bash && \
+    cd ${PROJECT_ROOT} && \
+    colcon build --symlink-install --packages-select om_api unitree_api
 
 # Dirs
 RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/launch && \
     chmod +x ${PROJECT_ROOT}/scripts/*.sh 2>/dev/null || true && \
     chmod +x ${PROJECT_ROOT}/src/*.py 2>/dev/null || true
 
-# Entrypoint
+# Entrypoint - source both ROS and colcon workspace
 RUN printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -e' \
   'source /opt/ros/jazzy/setup.bash' \
+  'source /opt/person_following/install/setup.bash' \
   'export PATH=/opt/venv/bin:$PATH' \
   'exec "$@"' \
   > /entrypoint.sh && chmod +x /entrypoint.sh
