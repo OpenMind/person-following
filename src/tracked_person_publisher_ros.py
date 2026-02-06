@@ -22,20 +22,20 @@ Commands: enroll | clear | switch | clear_history | delete_history |
           save_history | load_history | set_max_history | status | quit
 """
 
-import os
-
 from __future__ import annotations
 
 import argparse
 import json
 import logging
+import os
 import queue
 import signal
 import sys
 import threading
 import time
-from typing import Literal, Optional, Tuple
 from pathlib import Path
+from typing import Literal, Optional, Tuple
+
 import cv2
 import message_filters
 import numpy as np
@@ -48,6 +48,7 @@ from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import String
+
 from person_following_command import Command, CommandServer, SharedStatus
 
 # Logging
@@ -70,10 +71,16 @@ def parse_args():
     # Pick calibration defaults based on docker-compose env ROBOT_TYPE
     robot_type = os.getenv("ROBOT_TYPE", "go2").strip().lower()
     calib_defaults = {
-        "go2": (f"{INTRINSICS_CACHE_DIR}/intrinsic_go2.yaml", f"{EXTRINSICS_CACHE_DIR}/extrinsic_go2.yaml"),
-        "tron": (f"{INTRINSICS_CACHE_DIR}/intrinsic_tron.yaml", f"{EXTRINSICS_CACHE_DIR}/extrinsic_tron.yaml"),
+        "go2": (
+            f"{INTRINSICS_CACHE_DIR}/camera_intrinsic_go2.yaml",
+            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_go2.yaml",
+        ),
+        "tron": (
+            f"{INTRINSICS_CACHE_DIR}/camera_intrinsic_tron.yaml",
+            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
+        ),
     }
-    
+
     if robot_type not in calib_defaults:
         logging.getLogger("tracked_person_publisher_ros").warning(
             f"Unknown ROBOT_TYPE={robot_type!r}; defaulting to 'go2'"
