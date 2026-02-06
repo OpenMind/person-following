@@ -7,7 +7,8 @@ import math
 import threading
 import time
 from enum import Enum
-from typing import Optional
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Literal, Optional
 from uuid import uuid4
 
 import rclpy
@@ -30,6 +31,7 @@ class FollowerState(Enum):
     APPROACHING = "APPROACHING"
     GREETING_IN_PROGRESS = "GREETING_IN_PROGRESS"
     SEARCHING = "SEARCHING"
+    FOLLOWING = "FOLLOWING"
 
 
 class HandshakeCode:
@@ -40,11 +42,118 @@ class HandshakeCode:
     SWITCH = 2
 
 
+class _ModeControlHTTPServer(ThreadingHTTPServer):
+    """HTTP server for mode control with reference to PersonFollower node."""
+
+    def __init__(self, addr, handler_cls, node: "PersonFollower"):
+        super().__init__(addr, handler_cls)
+        self.node = node
+
+
+class _ModeControlHandler(BaseHTTPRequestHandler):
+    """HTTP request handler for mode control endpoints."""
+
+    server: _ModeControlHTTPServer
+
+    def log_message(self, fmt, *args):
+        """Suppress default HTTP logging."""
+        return
+
+    def _send_json(self, code: int, payload: dict):
+        """Send JSON response."""
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _read_json(self) -> Optional[dict]:
+        """Read and parse JSON from request body."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            length = 0
+        if length <= 0:
+            return None
+        raw = self.rfile.read(length)
+        try:
+            return json.loads(raw.decode("utf-8"))
+        except Exception:
+            return None
+
+    def do_GET(self):
+        """Handle GET requests."""
+        if self.path == "/healthz":
+            self._send_json(200, {"ok": True})
+            return
+        if self.path == "/status":
+            node = self.server.node
+            self._send_json(
+                200,
+                {
+                    "ok": True,
+                    "operation_mode": node.get_operation_mode(),
+                    "state": node.state.value,
+                },
+            )
+            return
+        if self.path == "/get_mode":
+            mode = self.server.node.get_operation_mode()
+            self._send_json(200, {"ok": True, "operation_mode": mode})
+            return
+        self._send_json(404, {"ok": False, "error": "not_found"})
+
+    def do_POST(self):
+        """Handle POST requests."""
+        data = self._read_json() or {}
+
+        if self.path == "/set_mode":
+            mode = data.get("mode")
+            if mode not in ("greeting", "following"):
+                self._send_json(
+                    400,
+                    {
+                        "ok": False,
+                        "error": "invalid_mode",
+                        "valid_modes": ["greeting", "following"],
+                    },
+                )
+                return
+            success = self.server.node.set_operation_mode(mode)
+            self._send_json(200, {"ok": success, "operation_mode": mode})
+            return
+
+        if self.path == "/command":
+            cmd = data.get("cmd")
+            if cmd == "set_mode":
+                mode = data.get("mode")
+                if mode not in ("greeting", "following"):
+                    self._send_json(
+                        400,
+                        {
+                            "ok": False,
+                            "error": "invalid_mode",
+                            "valid_modes": ["greeting", "following"],
+                        },
+                    )
+                    return
+                success = self.server.node.set_operation_mode(mode)
+                self._send_json(200, {"ok": success, "operation_mode": mode})
+                return
+            self._send_json(400, {"ok": False, "error": "unknown_command"})
+            return
+
+        self._send_json(404, {"ok": False, "error": "not_found"})
+
+
 class PersonFollower(Node):
     """
     A ROS2 node that follows a tracked person and integrates with OM1 greeting system.
     Uses PD control for smooth following and implements search behavior when no person is found.
     """
+
+    OperationMode = Literal["greeting", "following"]
 
     PATH_ANGLES = [60, 45, 30, 15, 0, -15, -30, -45, -60, 180]
     VALID_FORWARD_PATHS = [4]
@@ -87,7 +196,8 @@ class PersonFollower(Node):
         self.declare_parameter("angle_tolerance", 0.35)
         self.declare_parameter("timeout", 2.0)
         self.declare_parameter("cmd_host", "127.0.0.1")
-        self.declare_parameter("cmd_port", 8080)
+        self.declare_parameter("cmd_port", 2001)
+        self.declare_parameter("http_port", 2000)
         self.declare_parameter("search_rotation_angle", 15.0)
         self.declare_parameter("search_rotation_speed", 0.3)
         self.declare_parameter("search_wait_time", 1.0)
@@ -106,6 +216,7 @@ class PersonFollower(Node):
         self.timeout = self.get_parameter("timeout").value
         self.cmd_host = self.get_parameter("cmd_host").value
         self.cmd_port = self.get_parameter("cmd_port").value
+        self.http_port = self.get_parameter("http_port").value
         self.search_rotation_angle = self.get_parameter("search_rotation_angle").value
         self.search_rotation_speed = self.get_parameter("search_rotation_speed").value
         self.search_wait_time = self.get_parameter("search_wait_time").value
@@ -140,6 +251,9 @@ class PersonFollower(Node):
         self.state_lock = threading.Lock()
         self.state_entry_time = time.time()
 
+        self.operation_mode: "PersonFollower.OperationMode" = "greeting"
+        self.mode_lock = threading.Lock()
+
         self.tracking_status: Optional[dict] = None
         self.tracking_status_received = False
         self.last_tracking_mode: Optional[str] = None
@@ -160,6 +274,90 @@ class PersonFollower(Node):
         self.blocked_paths: set[int] = set()
         self.last_paths_time: Optional[float] = None
         self.paths_timeout = 1.0
+
+        self.stop_sent = False
+        self.is_tracking = False
+
+        self._start_http_server()
+
+    def _start_http_server(self):
+        """Start the HTTP server for mode control."""
+        self._http_server = _ModeControlHTTPServer(
+            ("0.0.0.0", self.http_port),
+            _ModeControlHandler,
+            self,
+        )
+        self._http_thread = threading.Thread(
+            target=self._http_server.serve_forever, daemon=True
+        )
+        self._http_thread.start()
+        self.get_logger().info(f"HTTP control server started on port {self.http_port}")
+
+    def _stop_http_server(self):
+        """Stop the HTTP server."""
+        if hasattr(self, "_http_server") and self._http_server:
+            self._http_server.shutdown()
+            self._http_server.server_close()
+
+    def get_operation_mode(self) -> "PersonFollower.OperationMode":
+        """Get current operation mode (thread-safe)."""
+        with self.mode_lock:
+            return self.operation_mode
+
+    def set_operation_mode(self, mode: "PersonFollower.OperationMode") -> bool:
+        """
+        Set operation mode and notify vision system.
+
+        Parameters
+        ----------
+        mode : PersonFollower.OperationMode
+            New operation mode ('greeting' or 'following').
+
+        Returns
+        -------
+        bool
+            True if mode was changed successfully.
+        """
+        with self.mode_lock:
+            if self.operation_mode == mode:
+                return True
+            old_mode = self.operation_mode
+            self.operation_mode = mode
+
+        self.get_logger().info(f"Operation mode changed: {old_mode} → {mode}")
+
+        self._notify_vision_mode_change(mode)
+
+        with self.state_lock:
+            if mode == "following":
+                self._stop_robot()
+                self._transition_to(FollowerState.FOLLOWING)
+                self.stop_sent = False
+                self.is_tracking = False
+            else:
+                self._stop_robot()
+                self._transition_to(FollowerState.IDLE)
+                self.tracking_status_received = False
+
+        return True
+
+    def _notify_vision_mode_change(self, mode: "PersonFollower.OperationMode"):
+        """Notify vision system of mode change via HTTP."""
+        url = f"{self.cmd_base_url}/command"
+        try:
+            response = requests.post(
+                url,
+                json={"cmd": "set_mode", "mode": mode},
+                timeout=2.0,
+            )
+            if response.status_code == 200:
+                self.get_logger().info(f"Vision system mode set to '{mode}'")
+            else:
+                self.get_logger().error(
+                    f"Failed to set vision mode: {response.status_code}"
+                )
+        except requests.exceptions.RequestException as e:
+            self.get_logger().error(f"Vision mode change error: {e}")
 
     def status_callback(self, msg: String):
         """
@@ -198,7 +396,7 @@ class PersonFollower(Node):
     def position_callback(self, msg: PoseStamped):
         """
         Handle incoming tracked person position updates.
-        Only processes position when in APPROACHING state.
+        Processes position in APPROACHING state (greeting mode) or FOLLOWING state (following mode).
 
         Parameters
         ----------
@@ -211,9 +409,29 @@ class PersonFollower(Node):
         self.last_position = msg
 
         with self.state_lock:
-            if self.state != FollowerState.APPROACHING:
-                return
+            current_state = self.state
 
+        if current_state == FollowerState.FOLLOWING:
+            self._handle_following_position(msg)
+        elif current_state == FollowerState.APPROACHING:
+            self._handle_approaching_position(msg)
+
+    def _handle_following_position(self, msg: PoseStamped):
+        """Handle position updates in FOLLOWING mode (pure PD control)."""
+        self.stop_sent = False
+        self.is_tracking = True
+
+        current_time = self.get_clock().now()
+        dt = 0.0
+        if self.last_msg_time is not None:
+            dt = (current_time - self.last_msg_time).nanoseconds / 1e9
+        self.last_msg_time = current_time
+
+        cmd_vel = self._calculate_following_velocity(msg, dt)
+        self.cmd_vel_publisher.publish(cmd_vel)
+
+    def _handle_approaching_position(self, msg: PoseStamped):
+        """Handle position updates in APPROACHING mode (greeting state machine)."""
         current_time = self.get_clock().now()
         dt = 0.0
         if self.last_msg_time is not None:
@@ -255,6 +473,8 @@ class PersonFollower(Node):
                 pass
             elif self.state == FollowerState.SEARCHING:
                 self._handle_searching_state()
+            elif self.state == FollowerState.FOLLOWING:
+                self._handle_following_state()
 
     def _transition_to(self, new_state: FollowerState):
         """
@@ -279,6 +499,13 @@ class PersonFollower(Node):
             self.last_distance_error = 0.0
             self.last_angle_error = 0.0
             self.last_msg_time = None
+
+        if new_state == FollowerState.FOLLOWING:
+            self.last_distance_error = 0.0
+            self.last_angle_error = 0.0
+            self.last_msg_time = None
+            self.stop_sent = False
+            self.is_tracking = False
 
         self.get_logger().info(
             f"State transition: {old_state.value} → {new_state.value}"
@@ -343,6 +570,24 @@ class PersonFollower(Node):
             self._transition_to(FollowerState.SEARCHING)
 
         self.last_tracking_mode = mode
+
+    def _handle_following_state(self):
+        """Handle FOLLOWING state - safety check for tracking timeout."""
+        if self.last_msg_time is None:
+            return
+
+        time_since_update = (
+            self.get_clock().now() - self.last_msg_time
+        ).nanoseconds / 1e9
+
+        if time_since_update > self.timeout:
+            if not self.stop_sent:
+                self._stop_robot()
+                self.stop_sent = True
+                self.is_tracking = False
+                self.get_logger().warn(
+                    f"No person detected for {time_since_update:.1f}s - stopping robot"
+                )
 
     def _handle_searching_state(self):
         """Handle SEARCHING state - rotate, pause, and search for people."""
@@ -517,6 +762,74 @@ class PersonFollower(Node):
         self.get_logger().info(
             f"[APPROACHING] Dist: {distance:.2f}m Err:{distance_error:.2f}, "
             f"Angle: {angle_deg:.1f}° [{safe_status}] | "
+            f"Cmd: lin={cmd.linear.x:.2f}, ang={cmd.angular.z:.2f}",
+            throttle_duration_sec=0.5,
+        )
+
+        return cmd
+
+    def _calculate_following_velocity(self, pose_msg: PoseStamped, dt: float) -> Twist:
+        """
+        Calculate velocity commands using simple PD control (following mode).
+
+        No obstacle avoidance or state machine - pure following behavior.
+
+        Parameters
+        ----------
+        pose_msg : geometry_msgs.msg.PoseStamped
+            The tracked person's position.
+        dt : float
+            Time delta since last update in seconds.
+
+        Returns
+        -------
+        geometry_msgs.msg.Twist
+            Velocity command with linear.x and angular.z populated.
+        """
+        cmd = Twist()
+
+        x = pose_msg.pose.position.x
+        z = pose_msg.pose.position.z
+
+        distance = math.sqrt(x**2 + z**2)
+        angle = math.atan2(x, z)
+
+        distance_error = distance - self.target_distance
+        angle_error = angle
+
+        p_ang = -self.angular_kp * angle_error
+        d_ang = 0.0
+        if dt > 0.001:
+            d_ang = -self.angular_kd * (angle_error - self.last_angle_error) / dt
+        angular_vel = p_ang + d_ang
+        self.last_angle_error = angle_error
+
+        p_lin = self.linear_kp * distance_error
+        d_lin = 0.0
+        if dt > 0.001:
+            d_lin = self.linear_kd * (distance_error - self.last_distance_error) / dt
+        linear_vel = p_lin + d_lin
+        self.last_distance_error = distance_error
+
+        angular_vel = max(
+            -self.max_angular_speed, min(angular_vel, self.max_angular_speed)
+        )
+
+        if abs(angle_error) > self.angle_tolerance:
+            cmd.angular.z = angular_vel
+            cmd.linear.x = 0.0
+        else:
+            cmd.angular.z = angular_vel
+            linear_vel = max(
+                -self.max_linear_speed, min(linear_vel, self.max_linear_speed)
+            )
+            if abs(distance_error) < self.distance_tolerance:
+                linear_vel = 0.0
+            cmd.linear.x = linear_vel
+
+        self.get_logger().info(
+            f"[FOLLOWING] Dist: {distance:.2f}m Err:{distance_error:.2f}, "
+            f"Angle: {math.degrees(angle):.1f}° | "
             f"Cmd: lin={cmd.linear.x:.2f}, ang={cmd.angular.z:.2f}",
             throttle_duration_sec=0.5,
         )
@@ -712,6 +1025,8 @@ def main(args=None):
     finally:
         person_follower.cmd_vel_publisher.publish(Twist())
         person_follower.get_logger().info("Shutting down, robot stopped")
+
+        person_follower._stop_http_server()
 
         if person_follower.zenoh_session:
             person_follower.zenoh_session.close()

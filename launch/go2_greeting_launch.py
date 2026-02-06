@@ -19,7 +19,6 @@ from launch.actions import (
     LogInfo,
     TimerAction,
 )
-from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
@@ -58,7 +57,7 @@ def generate_launch_description():
         output="screen",
     )
 
-    # Tracked person publisher with greeting mode
+    # Tracked person publisher with greeting mode (port 2001)
     def build_tracker_cmd():
         return [
             "bash",
@@ -71,6 +70,7 @@ def generate_launch_description():
             f"--scan-topic /scan "
             f"--intrinsics-yaml {project_root}/src/camera_intrinsics.yaml "
             f"--mode greeting "
+            f"--cmd-port 2001 "
             f"--yolo-det {project_root}/engine/yolo11n.engine "
             f"--yolo-seg {project_root}/engine/yolo11s-seg.engine",
         ]
