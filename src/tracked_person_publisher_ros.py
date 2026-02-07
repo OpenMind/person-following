@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import queue
 import signal
 import sys
@@ -59,34 +58,16 @@ logging.basicConfig(
 logger = logging.getLogger("tracked_person_publisher_ros")
 
 OperationMode = Literal["greeting", "following"]
+MODEL_DIR = str(Path(__file__).resolve().parents[1] / "model")
+ENGINE_DIR = str(Path(__file__).resolve().parents[1] / "engine")
 
-EXTRINSICS_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "extrinsics-files")
-INTRINSICS_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "intrinsics-files")
+Path(MODEL_DIR).mkdir(parents=True, exist_ok=True)
+Path(ENGINE_DIR).mkdir(parents=True, exist_ok=True)
 
 
 def parse_args():
     """Parse command line arguments."""
     p = argparse.ArgumentParser(description="Person Following with ROS 2")
-
-    # Pick calibration defaults based on docker-compose env ROBOT_TYPE
-    robot_type = os.getenv("ROBOT_TYPE", "go2").strip().lower()
-    calib_defaults = {
-        "go2": (
-            f"{INTRINSICS_CACHE_DIR}/camera_intrinsic_go2.yaml",
-            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_go2.yaml",
-        ),
-        "tron": (
-            f"{INTRINSICS_CACHE_DIR}/camera_intrinsic_tron.yaml",
-            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
-        ),
-    }
-
-    if robot_type not in calib_defaults:
-        logging.getLogger("tracked_person_publisher_ros").warning(
-            f"Unknown ROBOT_TYPE={robot_type!r}; defaulting to 'go2'"
-        )
-        robot_type = "go2"
-    intr_default, extr_default = calib_defaults[robot_type]
 
     # Operation mode
     p.add_argument(
@@ -214,10 +195,22 @@ def parse_args():
 
     # Go2 extrinsics
     p.add_argument(
-        "--extrinsics-yaml",
-        type=str,
-        default="extrinsic.yaml",
-        help="Path to camera extrinsics YAML. Used in --camera-mode go2.",
+        "--tx", type=float, default=0.0200, help="Extrinsic translation x (m)"
+    )
+    p.add_argument(
+        "--ty", type=float, default=0.0000, help="Extrinsic translation y (m)"
+    )
+    p.add_argument(
+        "--tz", type=float, default=-0.1600, help="Extrinsic translation z (m)"
+    )
+    p.add_argument(
+        "--rx", type=float, default=0.0000, help="Extrinsic rotation rx (rad)"
+    )
+    p.add_argument(
+        "--ry", type=float, default=-0.0000, help="Extrinsic rotation ry (rad)"
+    )
+    p.add_argument(
+        "--rz", type=float, default=-3.1400, help="Extrinsic rotation rz (rad)"
     )
 
     # LiDAR clustering params
@@ -276,7 +269,7 @@ def parse_args():
         help="Command API bind host (default: 127.0.0.1)",
     )
     p.add_argument(
-        "--cmd-port", type=int, default=2001, help="Command API port (default: 2001)"
+        "--cmd-port", type=int, default=8080, help="Command API port (default: 8080)"
     )
     p.add_argument(
         "--no-command-server",
@@ -288,8 +281,8 @@ def parse_args():
     p.add_argument(
         "--max-history-size",
         type=int,
-        default=1,
-        help="Maximum number of greeted persons to remember (default: 1)",
+        default=3,
+        help="Maximum number of greeted persons to remember (default: 3)",
     )
     p.add_argument(
         "--history-file",
@@ -556,70 +549,6 @@ def load_intrinsics_yaml(path: str) -> Tuple[float, float, float, float, int, in
     cx = float(K[0, 2])
     cy = float(K[1, 2])
     return fx, fy, cx, cy, int(w), int(h)
-
-
-def load_extrinsics_yaml(path: str) -> Tuple[float, float, float, float, float, float]:
-    """
-    Load camera extrinsics from YAML file.
-
-    Parameters
-    ----------
-    path : str
-        Path to YAML file with translation and rotation_euler.
-
-    Returns
-    -------
-    tx : float
-        Translation x in meters.
-    ty : float
-        Translation y in meters.
-    tz : float
-        Translation z in meters.
-    rx : float
-        Rotation roll in radians.
-    ry : float
-        Rotation pitch in radians.
-    rz : float
-        Rotation yaw in radians.
-
-    Raises
-    ------
-    FileNotFoundError
-        If the extrinsics YAML file does not exist.
-    ValueError
-        If the YAML file is missing required fields.
-    """
-    import os
-
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Extrinsics file not found: '{path}'\n"
-            f"Please create the extrinsics YAML file with translation and rotation_euler fields."
-        )
-
-    with open(path, "r") as f:
-        data = yaml.safe_load(f)
-
-    if data is None:
-        raise ValueError(f"Extrinsics file '{path}' is empty or invalid YAML.")
-
-    if "translation" not in data:
-        raise ValueError(f"Extrinsics file '{path}' missing 'translation' field.")
-
-    if "rotation_euler" not in data:
-        raise ValueError(f"Extrinsics file '{path}' missing 'rotation_euler' field.")
-
-    translation = data.get("translation", {})
-    rotation = data.get("rotation_euler", {})
-
-    tx = float(translation.get("x", 0.0))
-    ty = float(translation.get("y", 0.0))
-    tz = float(translation.get("z", 0.0))
-    rx = float(rotation.get("roll", 0.0))
-    ry = float(rotation.get("pitch", 0.0))
-    rz = float(rotation.get("yaw", 0.0))
-
-    return tx, ty, tz, rx, ry, rz
 
 
 def euler_xyz_to_R(rx: float, ry: float, rz: float) -> np.ndarray:
@@ -1447,6 +1376,35 @@ def main() -> None:
     logger.info("PERSON FOLLOWING SYSTEM - ROS 2")
     logger.info("=" * 60)
 
+    from model_manager import ModelManager
+
+    logger.info("Checking and preparing models...")
+    model_manager = ModelManager(
+        model_dir=MODEL_DIR,
+        engine_dir=ENGINE_DIR,
+        force_recompile=False,  # Set to True to force recompile
+    )
+
+    logger.info("Preparing detection model (YOLO11n)...")
+    det_success, det_engine = model_manager.prepare_model("yolo11n")
+    if not det_success:
+        logger.error("Failed to prepare detection model")
+        sys.exit(1)
+    args.yolo_det = str(det_engine)
+    logger.info(f"✓ Detection model ready: {det_engine}")
+
+    # Prepare segmentation model
+    logger.info("Preparing segmentation model (YOLO11s-seg)...")
+    seg_success, seg_engine = model_manager.prepare_model("yolo11s-seg")
+    if not seg_success:
+        logger.error("Failed to prepare segmentation model")
+        sys.exit(1)
+    args.yolo_seg = str(seg_engine)
+    logger.info(f"✓ Segmentation model ready: {seg_engine}")
+
+    logger.info("All models ready!")
+    logger.info("=" * 60)
+
     rclpy.init()
     ros_node = TrackedPersonPublisher()
 
@@ -1467,25 +1425,17 @@ def main() -> None:
             depth_scale=args.depth_scale,
         )
     else:
-        # Load extrinsics from YAML file
-        logger.info(f"Loading camera extrinsics from {args.extrinsics_yaml}...")
-        tx, ty, tz, rx, ry, rz = load_extrinsics_yaml(args.extrinsics_yaml)
-        logger.info(
-            f"Loaded extrinsics: tx={tx:.4f}, ty={ty:.4f}, tz={tz:.4f}, "
-            f"rx={rx:.4f}, ry={ry:.4f}, rz={rz:.4f}"
-        )
-
         camera = Go2ROSCameraLidar(
             node=ros_node,
             image_topic=args.image_topic,
             scan_topic=args.scan_topic,
             intrinsics_yaml=args.intrinsics_yaml,
-            tx=tx,
-            ty=ty,
-            tz=tz,
-            rx=rx,
-            ry=ry,
-            rz=rz,
+            tx=args.tx,
+            ty=args.ty,
+            tz=args.tz,
+            rx=args.rx,
+            ry=args.ry,
+            rz=args.rz,
         )
 
     if getattr(camera, "width", 0) == 0:
