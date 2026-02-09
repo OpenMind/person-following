@@ -74,12 +74,12 @@ def parse_args():
     robot_type = os.getenv("ROBOT_TYPE", "go2").strip().lower()
     calib_defaults = {
         "go2": (
-            f"{INTRINSICS_CACHE_DIR}/intrinsic_go2.yaml",
-            f"{EXTRINSICS_CACHE_DIR}/extrinsic_go2.yaml",
+            f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_go2.yaml",
+            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_go2.yaml",
         ),
         "tron": (
-            f"{INTRINSICS_CACHE_DIR}/intrinsic_tron.yaml",
-            f"{EXTRINSICS_CACHE_DIR}/extrinsic_tron.yaml",
+            f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_tron.yaml",
+            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
         ),
     }
 
@@ -198,7 +198,7 @@ def parse_args():
     p.add_argument(
         "--image-topic",
         type=str,
-        default="/camera/image_raw",
+        default="/camera/go2/image_raw",
         help="Go2 front camera image topic (BGR/RGB Image)",
     )
     p.add_argument(
