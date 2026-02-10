@@ -8,7 +8,6 @@ from cv_bridge import CvBridge
 from rclpy.node import Node
 from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import Image
-
 from unitree_api.msg import Request, RequestHeader, RequestIdentity, Response
 
 

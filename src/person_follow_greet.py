@@ -14,14 +14,13 @@ from uuid import uuid4
 import rclpy
 import requests
 from geometry_msgs.msg import PoseStamped, Twist
+from om_api.msg import Paths
 from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from om_api.msg import Paths
-from zenoh_msgs import PersonGreetingStatus
+from zenoh_msgs import PersonGreetingStatus, open_zenoh_session, prepare_header
 from zenoh_msgs import String as ZenohString
-from zenoh_msgs import open_zenoh_session, prepare_header
 
 
 class FollowerState(Enum):

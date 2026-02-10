@@ -26,13 +26,6 @@ repos:
       - id: black
         exclude: "^(engine/|model/)"
 
-  - repo: https://github.com/pycqa/isort
-    rev: 6.0.0
-    hooks:
-      - id: isort
-        args: ["--profile", "black"]
-        exclude: "^(engine/|model/)"
-
   - repo: https://github.com/crate-ci/typos
     rev: v1.28.3
     hooks:
