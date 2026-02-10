@@ -284,8 +284,8 @@ class PersonFollower(Node):
         self.declare_parameter("search_wait_time", 1.0)
 
         self.declare_parameter("geofence_enabled", True)
-        self.declare_parameter("geofence_radius", 5.0)
-        self.declare_parameter("geofence_soft_radius", 4.0)
+        self.declare_parameter("geofence_radius", 30.0)
+        self.declare_parameter("geofence_soft_radius", 28.0)
         self.declare_parameter("geofence_return_speed", 0.4)
         self.declare_parameter("geofence_max_search_rotations", 48)
 

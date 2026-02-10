@@ -76,10 +76,18 @@ def parse_args():
         "go2": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_go2.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_go2.yaml",
+            f"/camera/go2/image_raw/best_effort",
         ),
         "tron": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_tron.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
+            f"/camera/insta360/image_raw",
+
+        ),
+        "g1": (
+            f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_g1.yaml",
+            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_g1.yaml",
+            f"/camera/insta360/image_raw",
         ),
     }
 
@@ -88,7 +96,7 @@ def parse_args():
             f"Unknown ROBOT_TYPE={robot_type!r}; defaulting to 'go2'"
         )
         robot_type = "go2"
-    intr_default, extr_default = calib_defaults[robot_type]
+    intr_default, extr_default, camera_topic = calib_defaults[robot_type]
 
     # Operation mode
     p.add_argument(
@@ -163,7 +171,7 @@ def parse_args():
     p.add_argument(
         "--color-topic",
         type=str,
-        default="/camera/camera/color/image_raw",
+        default=camera_topic,
         help="ROS color image topic (only used for realsense depth camera)",
     )
     p.add_argument(
@@ -704,7 +712,7 @@ class Go2ROSCameraLidar:
         qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
             history=HistoryPolicy.KEEP_LAST,
-            depth=1,
+            depth=10,
         )
 
         self._img_sub = node.create_subscription(
