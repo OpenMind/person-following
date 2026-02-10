@@ -1432,17 +1432,16 @@ class PersonFollowingSystem:
             if time_lost >= self.searching_timeout:
                 logger.info(
                     f"Searching timeout ({time_lost:.1f}s >= {self.searching_timeout}s), "
-                    "saving to history and going inactive"
+                    "going inactive (not saving to history - person left before greeting)"
                 )
-                saved = self._save_current_target_to_history()
-                if self.auto_save_history and saved:
-                    self.save_history()
+                # Don't save to history - person walked away before greeting
+                # They can be re-approached if they return
                 self.clear_target()
                 return {
                     "target_found": False,
                     "timeout_inactive": True,
                     "time_lost": time_lost,
-                    "saved_to_history": saved,
+                    "saved_to_history": False,
                 }
 
         self.all_candidates_info = []

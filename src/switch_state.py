@@ -32,8 +32,8 @@ class SwitchState:
     """
 
     # Configuration
-    switch_interval: float = 0.33  # ~3 Hz
-    candidate_timeout: float = 3.0  # 3 seconds per candidate
+    switch_interval: float = 0.5  # ~3 Hz
+    candidate_timeout: float = 1.0  # 3 seconds per candidate
 
     # State
     active: bool = False

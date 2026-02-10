@@ -13,19 +13,6 @@ repos:
       - id: debug-statements
       - id: check-docstring-first
 
-  - repo: https://github.com/pycqa/isort
-    rev: 6.0.0
-    hooks:
-      - id: isort
-        args: ["--profile", "black"]
-        exclude: "^(engine/|model/)"
-
-  - repo: https://github.com/psf/black
-    rev: 25.1.0
-    hooks:
-      - id: black
-        exclude: "^(engine/|model/)"
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.9.3
     hooks:
@@ -33,6 +20,11 @@ repos:
         args: ["--fix"]
         exclude: "^(engine/|model/)"
 
+  - repo: https://github.com/psf/black
+    rev: 25.1.0
+    hooks:
+      - id: black
+        exclude: "^(engine/|model/)"
 
   - repo: https://github.com/crate-ci/typos
     rev: v1.28.3
