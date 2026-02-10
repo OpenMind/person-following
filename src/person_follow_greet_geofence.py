@@ -34,9 +34,6 @@ from zenoh_msgs import PersonGreetingStatus, open_zenoh_session, prepare_header
 from zenoh_msgs import String as ZenohString
 
 
-# =============================================================================
-# Quaternion to Euler conversion (avoid tf_transformations dependency)
-# =============================================================================
 def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
     """
     Extract yaw angle from quaternion.
@@ -57,9 +54,6 @@ def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
     return math.atan2(siny_cosp, cosy_cosp)
 
 
-# =============================================================================
-# State Machine
-# =============================================================================
 class FollowerState(Enum):
     """State machine states for person follower."""
 
@@ -80,9 +74,6 @@ class HandshakeCode:
     SWITCH = 2
 
 
-# =============================================================================
-# HTTP Server for Mode Control
-# =============================================================================
 class _ModeControlHTTPServer(ThreadingHTTPServer):
     """HTTP server for mode control with reference to PersonFollower node."""
 
@@ -230,9 +221,6 @@ class _ModeControlHandler(BaseHTTPRequestHandler):
         self._send_json(404, {"ok": False, "error": "not_found"})
 
 
-# =============================================================================
-# Main PersonFollower Node
-# =============================================================================
 class PersonFollower(Node):
     """
     A ROS2 node that follows a tracked person and integrates with OM1 greeting system.
@@ -484,9 +472,6 @@ class PersonFollower(Node):
         except requests.exceptions.RequestException as e:
             self.get_logger().error(f"Vision mode change error: {e}")
 
-    # =========================================================================
-    # Geofence Methods
-    # =========================================================================
     def get_geofence_status(self) -> dict:
         """Get current geofence status."""
         distance_from_center = 0.0
