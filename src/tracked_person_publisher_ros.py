@@ -77,16 +77,19 @@ def parse_args():
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_go2.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_go2.yaml",
             "/camera/go2/image_raw/best_effort",
+            "go2",
         ),
         "tron": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_tron.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
             "/camera/insta360/image_raw",
+            "go2",
         ),
         "g1": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_g1.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_g1.yaml",
             "/camera/insta360/image_raw",
+            "go2",
         ),
     }
 
@@ -95,7 +98,7 @@ def parse_args():
             f"Unknown ROBOT_TYPE={robot_type!r}; defaulting to 'go2'"
         )
         robot_type = "go2"
-    intr_default, extr_default, camera_topic = calib_defaults[robot_type]
+    intr_default, extr_default, camera_topic, camera_mode = calib_defaults[robot_type]
 
     # Operation mode
     p.add_argument(
@@ -110,7 +113,7 @@ def parse_args():
     p.add_argument(
         "--yolo-det",
         type=str,
-        default="/opt/person_following/engine/yolo11n.engine",
+        default="/opt/person_following/engine/yolo11used for realsensen.engine",
         help="Path to YOLO detection TensorRT engine",
     )
     p.add_argument(
@@ -170,19 +173,19 @@ def parse_args():
     p.add_argument(
         "--color-topic",
         type=str,
-        default=camera_topic,
+        default="/camera/realsense2_camera_node/color/image_raw",
         help="ROS color image topic (only used for realsense depth camera)",
     )
     p.add_argument(
         "--depth-topic",
         type=str,
-        default="/camera/camera/aligned_depth_to_color/image_raw",
+        default="/camera/realsense2_camera_node/depth/image_rect_raw",
         help="ROS depth image topic (aligned depth (only used for realsense depth camera))",
     )
     p.add_argument(
         "--camera-info-topic",
         type=str,
-        default="/camera/camera/color/camera_info",
+        default="/camera/realsense2_camera_node/color/camera_info",
         help="ROS camera info topic (only used for realsense depth camera)",
     )
     p.add_argument(
@@ -196,7 +199,7 @@ def parse_args():
     p.add_argument(
         "--camera-mode",
         type=str,
-        default="realsense",
+        default=camera_mode,
         choices=["realsense", "go2"],
         help="Camera mode. 'realsense' uses color+depth topics. 'go2' uses /camera/image_raw and /scan.",
     )
@@ -205,7 +208,7 @@ def parse_args():
     p.add_argument(
         "--image-topic",
         type=str,
-        default="/camera/go2/image_raw",
+        default=camera_topic,
         help="Go2 front camera image topic (BGR/RGB Image)",
     )
     p.add_argument(

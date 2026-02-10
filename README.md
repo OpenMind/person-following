@@ -90,8 +90,8 @@ docker run \
 
 ##### Using UV Install for virtual env
 ```bash
-uv venv --system-site-packages
-uv sync
+uv venv --python /usr/bin/python3 --system-site-packages
+uv sync --all-extras
 source .venv/bin/activate
 ```
 
