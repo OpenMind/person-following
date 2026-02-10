@@ -26,13 +26,14 @@ import rclpy
 import requests
 from geometry_msgs.msg import PoseStamped, Twist
 from nav_msgs.msg import Odometry
-from om_api.msg import Paths
 from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
 
-from zenoh_msgs import PersonGreetingStatus, open_zenoh_session, prepare_header
+from om_api.msg import Paths
+from zenoh_msgs import PersonGreetingStatus
 from zenoh_msgs import String as ZenohString
+from zenoh_msgs import open_zenoh_session, prepare_header
 
 
 def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
