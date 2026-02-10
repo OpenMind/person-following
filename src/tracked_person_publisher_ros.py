@@ -76,18 +76,17 @@ def parse_args():
         "go2": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_go2.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_go2.yaml",
-            f"/camera/go2/image_raw/best_effort",
+            "/camera/go2/image_raw/best_effort",
         ),
         "tron": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_tron.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
-            f"/camera/insta360/image_raw",
-
+            "/camera/insta360/image_raw",
         ),
         "g1": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_g1.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_g1.yaml",
-            f"/camera/insta360/image_raw",
+            "/camera/insta360/image_raw",
         ),
     }
 

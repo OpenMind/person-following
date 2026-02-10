@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        - ROBOT_TYPE=${ROBOT_TYPE:-go2}
     image: openmindagi/person-following:latest
     container_name: person-following-system
     runtime: nvidia
@@ -18,6 +20,7 @@ services:
       - DISPLAY=${DISPLAY:-:0}
       - QT_X11_NO_MITSHM=1
       - PROJECT_ROOT=/opt/person_following
+      - ROBOT_TYPE=${ROBOT_TYPE:-go2}
       - DISPLAY_ENABLED=${DISPLAY_ENABLED:-false}
       - HF_TOKEN=${HF_TOKEN:-}
       - DEVICE_TYPE=${DEVICE_TYPE:-unitree_go2}
@@ -35,5 +38,6 @@ services:
         max-size: "10m"
         max-file: "3"
 
-    # Default: runs the Go2 greeting launch file
+    # Launches person following system with greeting mode
+    # Adjust ROBOT_TYPE environment variable for different robots (go2, g1, tron, etc)
     command: ros2 launch /opt/person_following/launch/go2_greeting_launch.py display:=${DISPLAY_ENABLED:-false}

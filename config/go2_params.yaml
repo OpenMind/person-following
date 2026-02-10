@@ -1,0 +1,37 @@
+# Go2 Robot Configuration
+# Unitree Go2 specific parameters for person following with geofencing
+
+person_follower:
+  ros__parameters:
+    # Control Parameters
+    target_distance: 0.8          # Target distance to person (meters)
+    max_linear_speed: 0.7         # Max forward speed (m/s) - Go2 can go faster
+    max_angular_speed: 1.6        # Max rotation speed (rad/s)
+
+    # PD Control Gains
+    linear_kp: 0.6                # Linear proportional gain
+    linear_kd: 0.05               # Linear derivative gain
+    angular_kp: 1.4               # Angular proportional gain
+    angular_kd: 0.1               # Angular derivative gain
+
+    # Tolerances
+    distance_tolerance: 0.2       # Distance error tolerance (meters)
+    angle_tolerance: 0.35         # Angle error tolerance (radians)
+    timeout: 2.0                  # Timeout for tracking (seconds)
+
+    # Vision API
+    cmd_host: "127.0.0.1"
+    cmd_port: 2001
+    http_port: 2000
+
+    # Search Parameters
+    search_rotation_angle: 15.0   # Degrees per rotation step
+    search_rotation_speed: 0.3    # Rotation speed (rad/s)
+    search_wait_time: 1.0         # Wait between search rotations (seconds)
+
+    # Geofence Parameters (Go2 specific)
+    geofence_enabled: true
+    geofence_radius: 30.0         # Hard boundary (meters)
+    geofence_soft_radius: 28.0    # Soft boundary for speed scaling (meters)
+    geofence_return_speed: 0.4    # Return speed (m/s)
+    geofence_max_search_rotations: 48  # Max rotations before giving up

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import random
 import threading
 import time
@@ -391,8 +392,10 @@ class PersonFollower(Node):
 
     def _log_startup_info(self):
         """Log startup information."""
+        robot_type = os.environ.get("ROBOT_TYPE", "unknown").lower()
         self.get_logger().info("=" * 60)
         self.get_logger().info("Person Follower with OM1 Integration Started")
+        self.get_logger().info(f"  Robot type: {robot_type}")
         self.get_logger().info(f"  Tracking API: {self.cmd_base_url}")
         self.get_logger().info(f"  Target distance: {self.target_distance}m")
         self.get_logger().info(f"  Geofence enabled: {self.geofence_enabled}")

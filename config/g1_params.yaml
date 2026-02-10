@@ -1,0 +1,38 @@
+# G1 Robot Configuration
+# Unitree G1 specific parameters for person following with geofencing
+# G1 is a bipedal robot with different dynamics than Go2
+
+person_follower:
+  ros__parameters:
+    # Control Parameters
+    target_distance: 0.9          # Slightly further due to G1's height
+    max_linear_speed: 0.5         # More conservative for balance (m/s)
+    max_angular_speed: 1.2        # More conservative rotation (rad/s)
+
+    # PD Control Gains
+    linear_kp: 0.5                # Slightly lower than Go2 for smoother motion
+    linear_kd: 0.06
+    angular_kp: 1.2
+    angular_kd: 0.12
+
+    # Tolerances
+    distance_tolerance: 0.25
+    angle_tolerance: 0.4
+    timeout: 2.5                  # Slightly longer timeout for G1
+
+    # Vision API
+    cmd_host: "127.0.0.1"
+    cmd_port: 2001
+    http_port: 2000
+
+    # Search Parameters
+    search_rotation_angle: 20.0   # Larger steps due to bipedal constraint
+    search_rotation_speed: 0.25   # Slower rotation for stability
+    search_wait_time: 1.5         # Longer wait time
+
+    # Geofence Parameters (G1 specific)
+    geofence_enabled: true
+    geofence_radius: 25.0         # Smaller radius for bipedal stability
+    geofence_soft_radius: 23.0
+    geofence_return_speed: 0.3    # Slower return for balance
+    geofence_max_search_rotations: 40
