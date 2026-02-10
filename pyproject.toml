@@ -3,7 +3,7 @@ name = "person-following-system"
 version = "0.1.0"
 description = "Person Following System for NVIDIA Jetson Thor with RealSense and ROS 2"
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.10,<3.11"
 dependencies = [
     "numpy<2",
     "pycuda",
