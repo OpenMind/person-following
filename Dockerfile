@@ -1,6 +1,6 @@
 
 # Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Humble)
-FROM nvcr.io/nvidia/pytorch:24.02-py3
+FROM nvcr.io/nvidia/pytorch:24.07-py3
 
 SHELL ["/bin/bash", "-lc"]
 
