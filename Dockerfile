@@ -4,13 +4,9 @@ FROM nvcr.io/nvidia/pytorch:25.10-py3
 
 SHELL ["/bin/bash", "-lc"]
 
-# Default to go2, can be overridden: docker build --build-arg ROBOT_TYPE=g1
-ARG ROBOT_TYPE=go2
-
 ENV DEBIAN_FRONTEND=noninteractive \
     ROS_DISTRO=jazzy \
     PROJECT_ROOT=/opt/person_following \
-    ROBOT_TYPE=${ROBOT_TYPE} \
     VIRTUAL_ENV=/opt/venv \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
     NVIDIA_DRIVER_CAPABILITIES=compute,utility,video,graphics \

@@ -3,8 +3,6 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-      args:
-        - ROBOT_TYPE=${ROBOT_TYPE:-go2}
     image: openmindagi/person-following:latest
     container_name: person-following-system
     runtime: nvidia
@@ -29,8 +27,7 @@ services:
       - /dev:/dev
       - /run/udev:/run/udev:ro
       - /sys:/sys:ro
-      - ./model:/opt/person_following/model:ro
-      - ./engine:/opt/person_following/engine:ro
+
 
     logging:
       driver: "json-file"
