@@ -37,6 +37,7 @@ def generate_launch_description():
     Robot type is read from ROBOT_TYPE environment variable.
     Parameters are loaded from config/<ROBOT_TYPE>_params.yaml.
     """
+    ros_distro = os.environ.get("ROS_DISTRO", "humble")
     project_root = os.environ.get("PROJECT_ROOT", "/opt/person_following")
     install_dir = os.path.join(project_root, "install")
     robot_type = os.environ.get("ROBOT_TYPE", "go2").lower()
@@ -55,7 +56,7 @@ def generate_launch_description():
         return [
             "bash",
             "-c",
-            f"source /opt/ros/jazzy/setup.bash && "
+            f"source /opt/ros/{ros_distro}/setup.bash && "
             f"source {install_dir}/setup.bash && "
             f"python3 {project_root}/src/tracked_person_publisher_ros.py "
             f"--camera-mode {robot_type} "
@@ -83,7 +84,7 @@ def generate_launch_description():
                 cmd=[
                     "bash",
                     "-c",
-                    f"source /opt/ros/jazzy/setup.bash && "
+                    f"source /opt/ros/{ros_distro}/setup.bash && "
                     f"source {install_dir}/setup.bash && "
                     f"python3 {project_root}/src/person_follow_greet_geofence.py "
                     f"--ros-args --params-file {config_file}",
