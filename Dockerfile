@@ -1,6 +1,6 @@
 
 # Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Humble)
-FROM nvcr.io/nvidia/pytorch:24.12-py3
+FROM nvcr.io/nvidia/pytorch:24.02-py3
 
 SHELL ["/bin/bash", "-lc"]
 
@@ -23,6 +23,11 @@ RUN if [ -d /opt/hpcx/ucx/lib ] && [ -d /opt/hpcx/ucc/lib ]; then \
     fi
 
 COPY --from=docker.io/astral/uv:latest /uv /uvx /usr/local/bin/
+
+# Fix apt sources to use https (some base images still have http)
+RUN sed -i 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' /etc/apt/sources.list 2>/dev/null || true \
+ && sed -i 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' /etc/apt/sources.list.d/ubuntu.sources 2>/dev/null || true \
+ && find /etc/apt/sources.list.d -type f -maxdepth 1 -exec sed -i 's|http://ports.ubuntu.com|https://ports.ubuntu.com|g' {} \; 2>/dev/null || true
 
 # System dependencies
 RUN set -eux; \
@@ -86,7 +91,8 @@ COPY pyproject.toml uv.lock ./
 
 # Create venv WITH system site-packages, then install deps from pyproject
 RUN uv venv "${VIRTUAL_ENV}" --python python3 --system-site-packages && \
-    uv sync --locked --no-install-project --all-extras
+    uv sync --locked --no-install-project --all-extras && \
+    uv pip install 'empy<4.0' lark catkin_pkg
 
 # Now copy the rest of the project
 COPY . ${PROJECT_ROOT}
