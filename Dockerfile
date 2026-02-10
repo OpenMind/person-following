@@ -1,11 +1,11 @@
 
-# Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Jazzy)
-FROM nvcr.io/nvidia/pytorch:25.10-py3
+# Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Humble)
+FROM nvcr.io/nvidia/pytorch:24.12-py3
 
 SHELL ["/bin/bash", "-lc"]
 
 ENV DEBIAN_FRONTEND=noninteractive \
-    ROS_DISTRO=jazzy \
+    ROS_DISTRO=humble \
     PROJECT_ROOT=/opt/person_following \
     VIRTUAL_ENV=/opt/venv \
     UV_PROJECT_ENVIRONMENT=/opt/venv \
@@ -51,7 +51,7 @@ RUN set -eux; \
     ; \
     rm -rf /var/lib/apt/lists/*
 
-# Install ROS 2 Jazzy
+# Install ROS 2 Humble
 RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
@@ -61,15 +61,15 @@ RUN set -eux; \
       > /etc/apt/sources.list.d/ros2.list; \
     apt-get update -o Acquire::Retries=5; \
     apt-get install -y --no-install-recommends --fix-missing \
-      ros-jazzy-ros-base \
-      ros-jazzy-cv-bridge \
-      ros-jazzy-message-filters \
-      ros-jazzy-image-transport \
-      ros-jazzy-camera-info-manager \
-      ros-jazzy-diagnostic-updater \
-      ros-jazzy-launch \
-      ros-jazzy-launch-ros \
-      ros-jazzy-rmw-cyclonedds-cpp \
+      ros-humble-ros-base \
+      ros-humble-cv-bridge \
+      ros-humble-message-filters \
+      ros-humble-image-transport \
+      ros-humble-camera-info-manager \
+      ros-humble-diagnostic-updater \
+      ros-humble-launch \
+      ros-humble-launch-ros \
+      ros-humble-rmw-cyclonedds-cpp \
       python3-rosdep \
       python3-colcon-common-extensions \
       python3-vcstool \
@@ -92,7 +92,7 @@ RUN uv venv "${VIRTUAL_ENV}" --python python3 --system-site-packages && \
 COPY . ${PROJECT_ROOT}
 
 # Build ROS2 packages (om_api, unitree_api)
-RUN source /opt/ros/jazzy/setup.bash && \
+RUN source /opt/ros/humble/setup.bash && \
     cd ${PROJECT_ROOT} && \
     colcon build --symlink-install --packages-select om_api unitree_api
 
@@ -105,7 +105,7 @@ RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/laun
 RUN printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -e' \
-  'source /opt/ros/jazzy/setup.bash' \
+  'source /opt/ros/humble/setup.bash' \
   'source /opt/person_following/install/setup.bash' \
   'export PATH=/opt/venv/bin:$PATH' \
   'exec "$@"' \
