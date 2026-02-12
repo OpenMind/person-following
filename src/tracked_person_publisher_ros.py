@@ -324,13 +324,13 @@ def parse_args():
     p.add_argument(
         "--switch-interval",
         type=float,
-        default=0.33,
+        default=0.3,
         help="Interval between feature checks during switch (default: 0.33s = ~3Hz)",
     )
     p.add_argument(
         "--switch-timeout",
         type=float,
-        default=3.0,
+        default=1.0,
         help="Max time to check each candidate during switch (default: 3.0s)",
     )
 
@@ -1123,7 +1123,10 @@ def draw_visualization(
             cv2.rectangle(display, (x1, y1), (x2, y2), (255, 255, 0), 3)
 
             time_left = ss.get_time_remaining(time.time())
-            label = f"Checking... checks={ss.valid_check_count} match={ss.match_votes} ({time_left:.1f}s)"
+            label = (
+                f"Checking... C={ss.best_clothing_sim:.2f} "
+                f"checks={ss.valid_check_count} match={ss.match_votes} ({time_left:.1f}s)"
+            )
             cv2.putText(
                 display,
                 label,
@@ -1142,6 +1145,15 @@ def draw_visualization(
                     cv2.rectangle(display, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     cv2.line(display, (x1, y1), (x2, y2), (0, 0, 255), 2)
                     cv2.line(display, (x2, y1), (x1, y2), (0, 0, 255), 2)
+                    cv2.putText(
+                        display,
+                        "IN HIST",
+                        (x1, y2 + 15),
+                        cv2.FONT_HERSHEY_SIMPLEX,
+                        0.45,
+                        (0, 0, 255),
+                        1,
+                    )
 
         for i in range(ss.current_candidate_idx + 1, len(ss.candidates)):
             if i < len(ss.candidates):
@@ -1161,7 +1173,7 @@ def draw_visualization(
 
         switch_label = (
             f"SWITCHING: {ss.current_candidate_idx + 1}/{len(ss.candidates)} "
-            f"(skipped: {ss.skipped_in_history})"
+            f"(skipped: {ss.skipped_in_history} hist, {ss.skipped_no_features} no-feat)"
         )
         cv2.putText(
             display,

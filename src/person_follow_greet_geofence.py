@@ -732,6 +732,8 @@ class PersonFollower(Node):
                 )
                 with self.state_lock:
                     if self.state == FollowerState.GREETING_IN_PROGRESS:
+                        # History already saved when person approached.
+                        # Just start switching to next person.
                         self._transition_to(FollowerState.SWITCHING)
                         self._call_switch_command()
         except Exception as e:
@@ -826,7 +828,7 @@ class PersonFollower(Node):
                     "[GEOFENCE] Found person is outside boundary, rejecting and searching..."
                 )
                 self.switch_command_pending = False
-                self._call_greeting_ack_command()
+                self._call_clear_command()  # Don't save — never greeted
                 self._transition_to(FollowerState.SEARCHING)
 
         elif mode == "INACTIVE" and self.switch_command_pending:
@@ -851,8 +853,11 @@ class PersonFollower(Node):
             return
 
         if approached:
-            self.get_logger().info("Person approached! Stopping and signaling OM1")
+            self.get_logger().info(
+                "Person approached! Saving to history and signaling OM1"
+            )
             self._stop_robot()
+            # Save features to history (person is close, good features) + clear target
             self._call_greeting_ack_command()
             self._publish_approached()
             self._transition_to(FollowerState.GREETING_IN_PROGRESS)
@@ -928,7 +933,7 @@ class PersonFollower(Node):
                 "Abandoning target and returning to safe zone."
             )
             self._stop_robot()
-            self._call_greeting_ack_command()
+            self._call_clear_command()  # Don't save — never greeted
             self.boundary_stuck_start_time = None
             self._transition_to(FollowerState.RETURNING_TO_CENTER)
             return True
@@ -1317,7 +1322,7 @@ class PersonFollower(Node):
                     "[GEOFENCE] Found person is outside boundary, rejecting..."
                 )
                 self.switch_command_pending = False
-                self._call_greeting_ack_command()
+                self._call_clear_command()  # Don't save — never greeted
                 self.search_phase = "rotate"
                 self.search_rotation_start_time = None
 
@@ -1579,8 +1584,16 @@ class PersonFollower(Node):
         return self._send_http_command("switch")
 
     def _call_greeting_ack_command(self) -> bool:
-        """Call greeting_ack command on tracking system via HTTP."""
+        """Call greeting_ack command on tracking system via HTTP.
+        This saves the current target to history — only call after greeting is done.
+        """
         return self._send_http_command("greeting_ack")
+
+    def _call_clear_command(self) -> bool:
+        """Call clear command on tracking system via HTTP.
+        Clears target WITHOUT saving to history.
+        """
+        return self._send_http_command("clear")
 
     def _send_http_command(self, command: str) -> bool:
         """Send HTTP command to tracking system."""

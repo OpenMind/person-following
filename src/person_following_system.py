@@ -541,10 +541,22 @@ class PersonFollowingSystem:
                 f"History full, removed oldest (track_id={removed.get('track_id')})"
             )
 
+        clip_count = sum(
+            1
+            for b in buckets_copy.values()
+            for d in b.values()
+            if d.get("clip") is not None
+        )
         logger.info(
-            f"Saved to history: {feature_count} features across {len(buckets_copy)} buckets "
+            f"Saved to history: {feature_count} features ({clip_count} with CLIP) "
+            f"across {len(buckets_copy)} buckets "
             f"(history size: {len(self.enrolled_history)})"
         )
+        if clip_count == 0 and self.use_clip:
+            logger.warning(
+                "[HISTORY] WARNING: Saved entry has NO CLIP embeddings! "
+                "This person cannot be reliably identified in history."
+            )
         return True
 
     def _get_closest_bucket_features(
@@ -586,6 +598,11 @@ class PersonFollowingSystem:
     ) -> Tuple[bool, float, float]:
         """
         Check if a person's features match anyone in history.
+
+        When use_clip=True, requires BOTH clothing AND CLIP to pass for a
+        definitive match.  If CLIP is unavailable on either side the comparison
+        is treated as inconclusive (no match) rather than falling back to
+        clothing-only, which would cause false positives.
 
         Parameters
         ----------
@@ -652,22 +669,40 @@ class PersonFollowingSystem:
 
                 # If clothing matches, check CLIP
                 if c_sim >= self.clothing_threshold:
-                    if self.use_clip and clip_emb is not None and hist_clip is not None:
-                        clip_sim = self.clothing_matcher.compute_clip_similarity(
-                            clip_emb, hist_clip
-                        )
-                        best_clip_sim = max(best_clip_sim, clip_sim)
-
-                        if clip_sim >= self.clip_threshold:
-                            logger.debug(
-                                f"MATCH: track_id={hist_entry.get('track_id')} "
-                                f"C={c_sim:.3f} CLIP={clip_sim:.3f} ({direction_name})"
+                    if self.use_clip:
+                        # CLIP is enabled — require CLIP confirmation
+                        if clip_emb is not None and hist_clip is not None:
+                            clip_sim = self.clothing_matcher.compute_clip_similarity(
+                                clip_emb, hist_clip
                             )
-                            return True, best_clothing_sim, best_clip_sim
+                            best_clip_sim = max(best_clip_sim, clip_sim)
+
+                            if clip_sim >= self.clip_threshold:
+                                logger.info(
+                                    f"[HISTORY] MATCH: hist_track={hist_entry.get('track_id')} "
+                                    f"C={c_sim:.3f} CLIP={clip_sim:.3f} ({direction_name})"
+                                )
+                                return True, best_clothing_sim, best_clip_sim
+                            else:
+                                logger.debug(
+                                    f"[HISTORY] Clothing passed but CLIP failed: "
+                                    f"hist_track={hist_entry.get('track_id')} "
+                                    f"C={c_sim:.3f} CLIP={clip_sim:.3f} < {self.clip_threshold}"
+                                )
+                        else:
+                            # CLIP unavailable on one or both sides — inconclusive.
+                            # Do NOT fall back to clothing-only (causes false positives).
+                            logger.debug(
+                                f"[HISTORY] Clothing passed but CLIP unavailable: "
+                                f"hist_track={hist_entry.get('track_id')} C={c_sim:.3f} "
+                                f"(candidate_clip={'yes' if clip_emb is not None else 'NO'}, "
+                                f"hist_clip={'yes' if hist_clip is not None else 'NO'}) — INCONCLUSIVE"
+                            )
                     else:
-                        # No CLIP, clothing match is enough
-                        logger.debug(
-                            f"MATCH (no CLIP): track_id={hist_entry.get('track_id')} "
+                        # CLIP disabled — clothing match is sufficient
+                        logger.info(
+                            f"[HISTORY] MATCH (CLIP disabled): "
+                            f"hist_track={hist_entry.get('track_id')} "
                             f"C={c_sim:.3f} ({direction_name})"
                         )
                         return True, best_clothing_sim, best_clip_sim
@@ -859,8 +894,10 @@ class PersonFollowingSystem:
         """
         Request to switch to a different target (not in history).
 
-        Saves current target to history, finds new candidates, and starts
-        SWITCHING state. Only available in greeting mode.
+        Clears current target, finds new candidates, and starts
+        SWITCHING state. Does NOT save current target to history —
+        history is only updated when greeting completes (greeting_ack).
+        Only available in greeting mode.
 
         Parameters
         ----------
@@ -887,10 +924,10 @@ class PersonFollowingSystem:
 
         timestamp = time.time()
 
-        # Save current target to history first
-        saved = False
-        if self.target.status != "INACTIVE":
-            saved = self._save_current_target_to_history()
+        # Do NOT save current target to history here.
+        # History is only updated via handle_greeting_acknowledged() after
+        # a greeting is actually completed.  Saving here would pollute
+        # history with un-greeted persons, causing false "all in history".
 
         # Clear current target
         self.clear_target()
@@ -923,7 +960,6 @@ class PersonFollowingSystem:
             return {
                 "started": False,
                 "reason": "no_candidates",
-                "saved_to_history": saved,
             }
 
         # Sort by distance (closest first)
@@ -936,7 +972,6 @@ class PersonFollowingSystem:
         return {
             "started": True,
             "candidates_count": len(candidates),
-            "saved_to_history": saved,
             "history_size": len(self.enrolled_history),
         }
 
@@ -1197,9 +1232,11 @@ class PersonFollowingSystem:
         )
         ss.record_check(timestamp, True, is_match, c_sim, clip_sim)
 
+        clip_status = "yes" if clip_emb is not None else "NO"
         logger.info(
             f"[SWITCH] #{ss.current_candidate_idx} track={candidate['track_id']}: "
-            f"C={c_sim:.3f} {'MATCH!' if is_match else 'no match'} "
+            f"C={c_sim:.3f} CLIP={clip_sim:.3f} clip_avail={clip_status} "
+            f"{'MATCH!' if is_match else 'no match'} "
             f"(check {ss.valid_check_count}, time_left={ss.get_time_remaining(timestamp):.1f}s)"
         )
 
