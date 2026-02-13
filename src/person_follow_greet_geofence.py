@@ -259,7 +259,7 @@ class PersonFollower(Node):
             self.zenoh_session = None
             self.get_logger().error(f"Zenoh session error: {e}")
 
-        self.state_machine_timer = self.create_timer(0.1, self.state_machine_tick)
+        self.state_machine_timer = self.create_timer(0.3, self.state_machine_tick)
 
         self._log_startup_info()
 
@@ -290,6 +290,8 @@ class PersonFollower(Node):
         self.declare_parameter("geofence_return_speed", 0.4)
         self.declare_parameter("geofence_max_search_rotations", 48)
 
+        self.declare_parameter("approach_no_position_timeout", 10.0)
+
     def _load_parameters(self):
         """Load parameters into instance variables."""
         self.target_distance = self.get_parameter("target_distance").value
@@ -317,6 +319,10 @@ class PersonFollower(Node):
         self.geofence_return_speed = self.get_parameter("geofence_return_speed").value
         self.geofence_max_search_rotations = self.get_parameter(
             "geofence_max_search_rotations"
+        ).value
+
+        self.approach_no_position_timeout = self.get_parameter(
+            "approach_no_position_timeout"
         ).value
 
         self.cmd_base_url = f"http://{self.cmd_host}:{self.cmd_port}"
@@ -387,6 +393,8 @@ class PersonFollower(Node):
         self.geofence_return_target: Optional[Tuple[float, float]] = None
         self.boundary_stuck_start_time: Optional[float] = None
         self.return_obstruction_start_time: Optional[float] = None
+
+        self.last_valid_position_time: Optional[float] = None
 
         self._start_http_server()
 
@@ -712,6 +720,8 @@ class PersonFollower(Node):
 
     def _handle_approaching_position(self, msg: PoseStamped):
         """Handle position updates in APPROACHING mode."""
+        self.last_valid_position_time = time.time()
+
         current_time = self.get_clock().now()
         dt = 0.0
         if self.last_msg_time is not None:
@@ -771,7 +781,7 @@ class PersonFollower(Node):
             self.search_phase = "rotate"
             self.search_rotation_start_time = None
             self.search_pause_start_time = None
-            self.search_direction *= -1
+            self.search_direction *= 1
 
         if new_state == FollowerState.APPROACHING:
             self.last_distance_error = 0.0
@@ -779,6 +789,7 @@ class PersonFollower(Node):
             self.last_msg_time = None
             self.search_rotation_count = 0
             self.boundary_stuck_start_time = None
+            self.last_valid_position_time = time.time()
 
         if new_state == FollowerState.FOLLOWING:
             self.last_distance_error = 0.0
@@ -840,6 +851,19 @@ class PersonFollower(Node):
 
     def _handle_approaching_state(self):
         """Handle APPROACHING state - PD control and check for approached."""
+        # Check for timeout - no valid position received for too long
+        if self.last_valid_position_time is not None:
+            time_since_position = time.time() - self.last_valid_position_time
+            if time_since_position > self.approach_no_position_timeout:
+                self.get_logger().warn(
+                    f"[TIMEOUT] No valid position for {time_since_position:.1f}s "
+                    f"(> {self.approach_no_position_timeout}s), returning to search"
+                )
+                self._stop_robot()
+                self._call_clear_command()
+                self._transition_to(FollowerState.SEARCHING)
+                return
+
         if self.tracking_status is None:
             return
 
