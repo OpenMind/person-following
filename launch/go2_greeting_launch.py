@@ -77,7 +77,6 @@ def generate_launch_description():
             f"source /opt/ros/jazzy/setup.bash && "
             f"source {install_dir}/setup.bash && "
             f"python3 {project_root}/src/tracked_person_publisher_ros.py "
-            f"--camera-mode {robot_type} "
             f"--scan-topic /scan "
             f"--mode greeting "
             f"--cmd-port 2001 ",

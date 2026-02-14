@@ -21,7 +21,6 @@ services:
       - ROBOT_TYPE=${ROBOT_TYPE:-go2}
       - DISPLAY_ENABLED=${DISPLAY_ENABLED:-false}
       - HF_TOKEN=${HF_TOKEN:-}
-      - DEVICE_TYPE=${DEVICE_TYPE:-unitree_go2}
 
     volumes:
       - /dev:/dev
