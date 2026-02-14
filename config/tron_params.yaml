@@ -4,15 +4,15 @@
 person_follower:
   ros__parameters:
     # Control Parameters
-    target_distance: 0.85
-    max_linear_speed: 0.65
-    max_angular_speed: 1.5
+    target_distance: 0.7
+    max_linear_speed: 0.3
+    max_angular_speed: 0.5
 
     # PD Control Gains
-    linear_kp: 0.55
-    linear_kd: 0.055
-    angular_kp: 1.3
-    angular_kd: 0.11
+    linear_kp: 0.4
+    linear_kd: 0.05
+    angular_kp: 1.2
+    angular_kd: 0.1
 
     # Tolerances
     distance_tolerance: 0.22

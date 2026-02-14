@@ -5,20 +5,20 @@
 person_follower:
   ros__parameters:
     # Control Parameters
-    target_distance: 0.9          # Slightly further due to G1's height
+    target_distance: 0.8          # Slightly further due to G1's height
     max_linear_speed: 0.5         # More conservative for balance (m/s)
-    max_angular_speed: 1.2        # More conservative rotation (rad/s)
+    max_angular_speed: 1.0        # More conservative rotation (rad/s)
 
     # PD Control Gains
-    linear_kp: 0.5                # Slightly lower than Go2 for smoother motion
-    linear_kd: 0.06
-    angular_kp: 1.2
-    angular_kd: 0.12
+    linear_kp: 0.6                # Slightly lower than Go2 for smoother motion
+    linear_kd: 0.05
+    angular_kp: 1.4
+    angular_kd: 0.1
 
     # Tolerances
-    distance_tolerance: 0.25
-    angle_tolerance: 0.4
-    timeout: 2.5                  # Slightly longer timeout for G1
+    distance_tolerance: 0.2
+    angle_tolerance: 0.35
+    timeout: 2.0                 # Slightly longer timeout for G1
 
     # Vision API
     cmd_host: "127.0.0.1"
@@ -27,8 +27,8 @@ person_follower:
 
     # Search Parameters
     search_rotation_angle: 20.0   # Larger steps due to bipedal constraint
-    search_rotation_speed: 0.25   # Slower rotation for stability
-    search_wait_time: 1.5         # Longer wait time
+    search_rotation_speed: 0.8   # Slower rotation for stability
+    search_wait_time: 1.0         # Longer wait time
 
     # Geofence Parameters (G1 specific)
     geofence_enabled: true
