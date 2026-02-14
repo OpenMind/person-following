@@ -3,8 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: openmindagi/person-following:latest
-    container_name: person-following-system
+    image: openmindagi/person_following:latest
+    container_name: person_following
     runtime: nvidia
     network_mode: host
     privileged: true
