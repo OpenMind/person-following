@@ -121,11 +121,13 @@ def generate_launch_description():
         launch_actions.append(LogInfo(msg="Starting USB Camera Node (tron)..."))
         launch_actions.append(usb_cam_cmd)
 
-    launch_actions.extend([
-        LogInfo(msg="Step 1: Starting Tracked Person Publisher (greeting mode)..."),
-        tracked_person_publisher_cmd,
-        LogInfo(msg="Step 2: Starting Person Follow Greet with Geofencing..."),
-        person_follow_greet_cmd,
-    ])
+    launch_actions.extend(
+        [
+            LogInfo(msg="Step 1: Starting Tracked Person Publisher (greeting mode)..."),
+            tracked_person_publisher_cmd,
+            LogInfo(msg="Step 2: Starting Person Follow Greet with Geofencing..."),
+            person_follow_greet_cmd,
+        ]
+    )
 
     return LaunchDescription(launch_actions)
