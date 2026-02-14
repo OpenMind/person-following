@@ -70,6 +70,7 @@ RUN set -eux; \
       ros-jazzy-launch \
       ros-jazzy-launch-ros \
       ros-jazzy-rmw-cyclonedds-cpp \
+      ros-jazzy-usb-cam \
       python3-rosdep \
       python3-colcon-common-extensions \
       python3-vcstool \

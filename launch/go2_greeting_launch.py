@@ -50,6 +50,25 @@ def generate_launch_description():
             f"Set ROBOT_TYPE environment variable and create config/<ROBOT_TYPE>_params.yaml"
         )
 
+    # USB camera node for tron robot
+    usb_cam_cmd = None
+    if robot_type == "tron":
+        usb_cam_cmd = TimerAction(
+            period=0.0,
+            actions=[
+                ExecuteProcess(
+                    cmd=[
+                        "bash",
+                        "-c",
+                        "source /opt/ros/jazzy/setup.bash && "
+                        "ros2 run usb_cam usb_cam_node_exe",
+                    ],
+                    name="usb_cam",
+                    output="screen",
+                )
+            ],
+        )
+
     # Tracked person publisher with greeting mode (port 2001)
     def build_tracker_cmd():
         return [
@@ -94,12 +113,20 @@ def generate_launch_description():
         ],
     )
 
-    return LaunchDescription(
-        [
-            LogInfo(msg=f"Starting {robot_type.upper()} Greeting System..."),
-            LogInfo(msg="Step 1: Starting Tracked Person Publisher (greeting mode)..."),
-            tracked_person_publisher_cmd,
-            LogInfo(msg="Step 2: Starting Person Follow Greet with Geofencing..."),
-            person_follow_greet_cmd,
-        ]
-    )
+    launch_actions = [
+        LogInfo(msg=f"Starting {robot_type.upper()} Greeting System..."),
+    ]
+
+    # Add USB camera node for tron robot
+    if usb_cam_cmd is not None:
+        launch_actions.append(LogInfo(msg="Starting USB Camera Node (tron)..."))
+        launch_actions.append(usb_cam_cmd)
+
+    launch_actions.extend([
+        LogInfo(msg="Step 1: Starting Tracked Person Publisher (greeting mode)..."),
+        tracked_person_publisher_cmd,
+        LogInfo(msg="Step 2: Starting Person Follow Greet with Geofencing..."),
+        person_follow_greet_cmd,
+    ])
+
+    return LaunchDescription(launch_actions)
