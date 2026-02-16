@@ -440,6 +440,7 @@ def main():
             # Get frames
             color_frame, depth_frame = camera.get_frames()
             if color_frame is None:
+                time.sleep(0.01)
                 continue
 
             # Process frame

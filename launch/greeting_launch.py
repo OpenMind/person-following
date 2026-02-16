@@ -15,7 +15,6 @@ Requires colcon build to be run first for om_api and unitree_api packages.
 
 Usage:
     export ROBOT_TYPE=go2              # Choose robot type
-    export PROJECT_ROOT=/opt/person_following
     ros2 launch person_following_sys geeting_launch.py
 """
 
@@ -37,7 +36,9 @@ def generate_launch_description():
     Robot type is read from ROBOT_TYPE environment variable.
     Parameters are loaded from config/<ROBOT_TYPE>_params.yaml.
     """
-    project_root = os.environ.get("PROJECT_ROOT", "/opt/person_following")
+    launch_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(launch_file_dir)
+
     install_dir = os.path.join(project_root, "install")
     robot_type = os.environ.get("ROBOT_TYPE", "go2").lower()
     config_file = os.path.join(project_root, "config", f"{robot_type}_params.yaml")

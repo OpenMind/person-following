@@ -27,8 +27,8 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     """Generate the launch description for person following system."""
-    # Get project root from environment or use default
-    project_root = os.environ.get("PROJECT_ROOT", "/opt/person_following")
+    launch_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(launch_file_dir)
 
     # Declare launch arguments
     yolo_det_arg = DeclareLaunchArgument(
