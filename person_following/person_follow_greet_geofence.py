@@ -30,6 +30,7 @@ from om_api.msg import Paths
 from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
 from std_msgs.msg import String
+from unitree_api.msg import Request, RequestHeader, RequestIdentity
 
 from zenoh_msgs import PersonGreetingStatus, open_zenoh_session, prepare_header
 from zenoh_msgs import String as ZenohString
@@ -332,6 +333,9 @@ class PersonFollower(Node):
         self.cmd_vel_publisher = self.create_publisher(Twist, "/cmd_vel", 10)
         self.state_publisher = self.create_publisher(
             String, "/person_follower/state", 10
+        )
+        self.sport_publisher = self.create_publisher(
+            Request, "/api/sport/request", 10
         )
 
     def _setup_subscribers(self):
@@ -811,6 +815,11 @@ class PersonFollower(Node):
         self.get_logger().info(
             f"State transition: {old_state.value} → {new_state.value}"
         )
+
+        if new_state in (FollowerState.IDLE, FollowerState.GREETING_IN_PROGRESS):
+            self._disable_classical_mode()
+        else:
+            self._enable_classical_mode()
 
     def _handle_idle_state(self):
         """Handle IDLE state - wait for SWITCH command from om/person_greeting."""
@@ -1586,6 +1595,34 @@ class PersonFollower(Node):
     def _stop_robot(self):
         """Publish zero velocity to stop the robot."""
         self.cmd_vel_publisher.publish(Twist())
+
+    def _enable_classical_mode(self):
+        """Enable classical walk mode for stable movement with payload."""
+        try:
+            request_msg = Request()
+            request_msg.header = RequestHeader()
+            request_msg.header.identity = RequestIdentity()
+            request_msg.header.identity.api_id = 2049  # SPORT_API_ID_CLASSICWALK
+
+            request_msg.parameter = json.dumps({"data": True})
+            self.sport_publisher.publish(request_msg)
+            self.get_logger().debug("Enabled classical walk mode")
+        except Exception as e:
+            self.get_logger().error(f"Failed to enable classical mode: {e}")
+
+    def _disable_classical_mode(self):
+        """Disable classical walk mode."""
+        try:
+            request_msg = Request()
+            request_msg.header = RequestHeader()
+            request_msg.header.identity = RequestIdentity()
+            request_msg.header.identity.api_id = 2049  # SPORT_API_ID_CLASSICWALK
+
+            request_msg.parameter = json.dumps({"data": False})
+            self.sport_publisher.publish(request_msg)
+            self.get_logger().debug("Disabled classical walk mode")
+        except Exception as e:
+            self.get_logger().error(f"Failed to disable classical mode: {e}")
 
     def _publish_approached(self):
         """Publish APPROACHED status to OM1 via Zenoh."""
