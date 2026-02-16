@@ -235,9 +235,7 @@ class GeofenceManager:
 
         return inside
 
-    def apply_velocity_constraints(
-        self, cmd: Twist, is_greeting_mode: bool
-    ) -> Twist:
+    def apply_velocity_constraints(self, cmd: Twist, is_greeting_mode: bool) -> Twist:
         """
         Apply geofence constraints to velocity command.
 
@@ -292,9 +290,7 @@ class GeofenceManager:
             cmd.linear.x = 0.0
             return cmd
 
-        scale = (self.radius - distance_from_center) / (
-            self.radius - self.soft_radius
-        )
+        scale = (self.radius - distance_from_center) / (self.radius - self.soft_radius)
         scale = max(0.0, min(1.0, scale))
 
         original_speed = cmd.linear.x

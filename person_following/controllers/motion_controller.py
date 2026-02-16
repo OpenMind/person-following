@@ -90,9 +90,7 @@ class MotionController:
         self.safe_paths = safe_paths
         self.blocked_paths = blocked_paths
 
-    def calculate_velocity_following(
-        self, pose_msg: PoseStamped, dt: float
-    ) -> Twist:
+    def calculate_velocity_following(self, pose_msg: PoseStamped, dt: float) -> Twist:
         """
         Calculate velocity commands for following mode (no obstacle avoidance).
 

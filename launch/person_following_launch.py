@@ -84,7 +84,9 @@ def generate_launch_description():
 
         cmd = [
             "python3",
-            _os.path.join(_project_root, "person_following/nodes/tracked_person_publisher_ros.py"),
+            _os.path.join(
+                _project_root, "person_following/nodes/tracked_person_publisher_ros.py"
+            ),
             "--yolo-det",
             context.launch_configurations["yolo_det"],
             "--yolo-seg",
@@ -126,7 +128,9 @@ def generate_launch_description():
             ExecuteProcess(
                 cmd=[
                     "python3",
-                    os.path.join(project_root, "person_following/nodes/person_follower.py"),
+                    os.path.join(
+                        project_root, "person_following/nodes/person_follower.py"
+                    ),
                 ],
                 name="person_follower",
                 output="screen",

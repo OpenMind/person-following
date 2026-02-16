@@ -49,7 +49,11 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import String
 
-from person_following.controllers.person_following_command import Command, CommandServer, SharedStatus
+from person_following.controllers.person_following_command import (
+    Command,
+    CommandServer,
+    SharedStatus,
+)
 
 # Logging
 logging.basicConfig(

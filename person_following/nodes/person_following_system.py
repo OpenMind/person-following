@@ -10,7 +10,10 @@ from typing import List, Literal, Tuple
 
 import numpy as np
 
-from person_following.utils.clothing_matcher_lab_openclip import ClothingMatcher, SegmentationError
+from person_following.utils.clothing_matcher_lab_openclip import (
+    ClothingMatcher,
+    SegmentationError,
+)
 from person_following.utils.switch_state import SwitchState
 from person_following.utils.target_state import TargetState
 

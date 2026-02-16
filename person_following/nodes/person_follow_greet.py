@@ -32,8 +32,16 @@ from unitree_api.msg import Request, RequestHeader, RequestIdentity
 from person_following.managers.geofence_manager import GeofenceManager
 from person_following.utils.http_server import ModeControlHandler, ModeControlHTTPServer
 from person_following.controllers.motion_controller import MotionController
-from person_following.utils.state_machine import FollowerState, ReturnToCenter, SearchBehavior
-from person_following.utils.zenoh_msgs import PersonGreetingStatus, open_zenoh_session, prepare_header
+from person_following.utils.state_machine import (
+    FollowerState,
+    ReturnToCenter,
+    SearchBehavior,
+)
+from person_following.utils.zenoh_msgs import (
+    PersonGreetingStatus,
+    open_zenoh_session,
+    prepare_header,
+)
 from person_following.utils.zenoh_msgs import String as ZenohString
 
 
@@ -188,9 +196,7 @@ class PersonFollower(Node):
         self.state_publisher = self.create_publisher(
             String, "/person_follower/state", 10
         )
-        self.sport_publisher = self.create_publisher(
-            Request, "/api/sport/request", 10
-        )
+        self.sport_publisher = self.create_publisher(Request, "/api/sport/request", 10)
 
     def _setup_subscribers(self):
         """Create ROS subscribers."""
@@ -248,7 +254,9 @@ class PersonFollower(Node):
         self.get_logger().info(f"  Target distance: {self.target_distance}m")
         self.get_logger().info(f"  Geofence enabled: {self.geofence_manager.enabled}")
         if self.geofence_manager.enabled:
-            self.get_logger().info(f"  Geofence radius: {self.geofence_manager.radius}m")
+            self.get_logger().info(
+                f"  Geofence radius: {self.geofence_manager.radius}m"
+            )
             self.get_logger().info(
                 f"  Geofence soft radius: {self.geofence_manager.soft_radius}m"
             )
@@ -391,7 +399,9 @@ class PersonFollower(Node):
             dt = (current_time - self.last_msg_time).nanoseconds / 1e9
         self.last_msg_time = current_time
 
-        cmd_vel, path_safe = self.motion_controller.calculate_velocity_approaching(msg, dt)
+        cmd_vel, path_safe = self.motion_controller.calculate_velocity_approaching(
+            msg, dt
+        )
 
         # If no safe path found, switch to next person
         if not path_safe:
@@ -409,9 +419,7 @@ class PersonFollower(Node):
         try:
             msg = PersonGreetingStatus.deserialize(data.payload.to_bytes())
             if msg.status == HandshakeCode.SWITCH:
-                self.get_logger().info(
-                    "[Zenoh] Received SWITCH (2) from OM1"
-                )
+                self.get_logger().info("[Zenoh] Received SWITCH (2) from OM1")
                 with self.state_lock:
                     if self.state == FollowerState.IDLE:
                         # Start person following from IDLE state
@@ -720,7 +728,9 @@ class PersonFollower(Node):
                 self._stop_robot()
                 return
 
-            obstruction_duration = current_time - self.return_to_center.obstruction_start_time
+            obstruction_duration = (
+                current_time - self.return_to_center.obstruction_start_time
+            )
 
             if obstruction_duration < 5.0:
                 self._stop_robot()
@@ -762,7 +772,8 @@ class PersonFollower(Node):
         """Handle SEARCHING state - rotate, pause, and search for people."""
         if (
             self.geofence_manager.enabled
-            and self.search_behavior.rotation_count >= self.geofence_max_search_rotations
+            and self.search_behavior.rotation_count
+            >= self.geofence_max_search_rotations
         ):
             distance_from_center = self.geofence_manager.get_distance_from_center()
             if distance_from_center > self.geofence_manager.soft_radius * 0.5:

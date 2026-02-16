@@ -255,11 +255,13 @@ class ModelManager:
 
         if input_shape:
             shape_spec = f"{input_name}:{input_shape}"
-            cmd.extend([
-                f"--minShapes={shape_spec}",
-                f"--optShapes={shape_spec}",
-                f"--maxShapes={shape_spec}",
-            ])
+            cmd.extend(
+                [
+                    f"--minShapes={shape_spec}",
+                    f"--optShapes={shape_spec}",
+                    f"--maxShapes={shape_spec}",
+                ]
+            )
 
         try:
             logger.info(f"Running: {' '.join(cmd)}")

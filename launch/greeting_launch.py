@@ -15,7 +15,9 @@ Requires colcon build to be run first for om_api and unitree_api packages.
 
 Usage:
     export ROBOT_TYPE=go2              # Choose robot type
-    ros2 launch person_following_sys geeting_launch.py
+    colcon build
+    source install/setup.bash
+    ros2 launch launch/geeting_launch.py
 """
 
 import os
