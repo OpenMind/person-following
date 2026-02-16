@@ -83,7 +83,7 @@ docker run \
   -v $(pwd)/engine:/opt/person_following/engine \ (optional)
   -v /dev:/dev \
   person-following:latest \
-  bash /opt/person_following/src/start_person_following.sh
+  bash /opt/person_following/start_person_following.sh
 ```
 
 ### Option 2: Local Installation
@@ -234,7 +234,7 @@ source /opt/ros/jazzy/setup.bash
 source ~/realsense_ws/install/setup.bash
 source .venv/bin/activate
 
-python3 src/tracked_person_publisher_ros.py \
+python3 person_following/tracked_person_publisher_ros.py \
   --yolo-det ./engine/yolo11n.engine \
   --yolo-seg ./engine/yolo11s-seg.engine \
   --cmd-host 127.0.0.1 \

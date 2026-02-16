@@ -100,7 +100,7 @@ RUN source /opt/ros/jazzy/setup.bash && \
 # Dirs
 RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/launch && \
     chmod +x ${PROJECT_ROOT}/scripts/*.sh 2>/dev/null || true && \
-    chmod +x ${PROJECT_ROOT}/src/*.py 2>/dev/null || true
+    chmod +x ${PROJECT_ROOT}/person_following/*.py 2>/dev/null || true
 
 # Entrypoint - source both ROS and colcon workspace
 RUN printf '%s\n' \
