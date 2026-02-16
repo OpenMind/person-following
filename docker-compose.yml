@@ -36,4 +36,4 @@ services:
 
     # Launches person following system with greeting mode
     # Adjust ROBOT_TYPE environment variable for different robots (go2, g1, tron, etc)
-    command: ros2 launch /opt/person_following/launch/go2_greeting_launch.py display:=${DISPLAY_ENABLED:-false}
+    command: ros2 launch /opt/person_following/launch/greeting_launch.py display:=${DISPLAY_ENABLED:-false}

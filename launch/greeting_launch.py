@@ -16,7 +16,7 @@ Requires colcon build to be run first for om_api and unitree_api packages.
 Usage:
     export ROBOT_TYPE=go2              # Choose robot type
     export PROJECT_ROOT=/opt/person_following
-    ros2 launch person_following_sys go2_greeting_launch.py
+    ros2 launch person_following_sys geeting_launch.py
 """
 
 import os
@@ -103,7 +103,7 @@ def generate_launch_description():
                     "-c",
                     f"source /opt/ros/jazzy/setup.bash && "
                     f"source {install_dir}/setup.bash && "
-                    f"python3 {project_root}/person_following/person_follow_greet_geofence.py "
+                    f"python3 {project_root}/person_following/person_follow_greet.py "
                     f"--ros-args --params-file {config_file}",
                 ],
                 name="person_follow_greet",
