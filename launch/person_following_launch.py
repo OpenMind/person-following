@@ -27,8 +27,8 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     """Generate the launch description for person following system."""
-    # Get project root from environment or use default
-    project_root = os.environ.get("PROJECT_ROOT", "/opt/person_following")
+    launch_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(launch_file_dir)
 
     # Declare launch arguments
     yolo_det_arg = DeclareLaunchArgument(
@@ -84,7 +84,7 @@ def generate_launch_description():
 
         cmd = [
             "python3",
-            _os.path.join(_project_root, "person_following/tracked_person_publisher_ros.py"),
+            _os.path.join(_project_root, "person_following/nodes/tracked_person_publisher_ros.py"),
             "--yolo-det",
             context.launch_configurations["yolo_det"],
             "--yolo-seg",
@@ -126,7 +126,7 @@ def generate_launch_description():
             ExecuteProcess(
                 cmd=[
                     "python3",
-                    os.path.join(project_root, "person_following/person_follower.py"),
+                    os.path.join(project_root, "person_following/nodes/person_follower.py"),
                 ],
                 name="person_follower",
                 output="screen",

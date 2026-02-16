@@ -17,7 +17,6 @@ services:
       - RMW_IMPLEMENTATION=rmw_cyclonedds_cpp
       - DISPLAY=${DISPLAY:-:0}
       - QT_X11_NO_MITSHM=1
-      - PROJECT_ROOT=/opt/person_following
       - ROBOT_TYPE=${ROBOT_TYPE:-go2}
       - DISPLAY_ENABLED=${DISPLAY_ENABLED:-false}
       - HF_TOKEN=${HF_TOKEN:-}
