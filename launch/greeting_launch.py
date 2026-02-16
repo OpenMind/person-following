@@ -76,7 +76,7 @@ def generate_launch_description():
             "-c",
             f"source /opt/ros/jazzy/setup.bash && "
             f"source {install_dir}/setup.bash && "
-            f"python3 {project_root}/person_following/tracked_person_publisher_ros.py "
+            f"python3 {project_root}/person_following/nodes/tracked_person_publisher_ros.py "
             f"--scan-topic /scan "
             f"--mode greeting "
             f"--cmd-port 2001 ",
@@ -103,7 +103,7 @@ def generate_launch_description():
                     "-c",
                     f"source /opt/ros/jazzy/setup.bash && "
                     f"source {install_dir}/setup.bash && "
-                    f"python3 {project_root}/person_following/person_follow_greet.py "
+                    f"python3 {project_root}/person_following/nodes/person_follow_greet.py "
                     f"--ros-args --params-file {config_file}",
                 ],
                 name="person_follow_greet",
