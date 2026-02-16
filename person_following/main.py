@@ -17,6 +17,8 @@ import cv2
 import numpy as np
 import pyrealsense2 as rs
 
+from person_following.nodes.person_following_system import PersonFollowingSystem
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -399,7 +401,6 @@ def main():
 
     # Initialize person following system
     logger.info("[2/2] Initializing person following system...")
-    from person_following_system import PersonFollowingSystem
 
     system = PersonFollowingSystem(
         yolo_detection_engine=args.yolo_det,

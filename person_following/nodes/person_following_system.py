@@ -10,9 +10,9 @@ from typing import List, Literal, Tuple
 
 import numpy as np
 
-from clothing_matcher_lab_openclip import ClothingMatcher, SegmentationError
-from switch_state import SwitchState
-from target_state import TargetState
+from person_following.utils.clothing_matcher_lab_openclip import ClothingMatcher, SegmentationError
+from person_following.utils.switch_state import SwitchState
+from person_following.utils.target_state import TargetState
 
 CLIP_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "model")
 DEFAULT_HISTORY_PATH = str(
@@ -63,7 +63,7 @@ class PersonFollowingSystem:
         """
         Initialize the person following system.
         """
-        from yolo_detector import TRTYOLODetector
+        from person_following.utils.yolo_detector import TRTYOLODetector
 
         self.detector = TRTYOLODetector(
             yolo_detection_engine, conf_thresh=0.5, nms_thresh=0.45
