@@ -447,10 +447,17 @@ class PersonFollower(Node):
             msg = PersonGreetingStatus.deserialize(data.payload.to_bytes())
             if msg.status == HandshakeCode.SWITCH:
                 self.get_logger().info(
-                    f"[Zenoh] Received SWITCH (2) from OM1 - conversation finished (request_id: {msg.request_id.data})"
+                    "[Zenoh] Received SWITCH (2) from OM1"
                 )
                 with self.state_lock:
-                    if self.state == FollowerState.GREETING_IN_PROGRESS:
+                    if self.state == FollowerState.IDLE:
+                        # Start person following from IDLE state
+                        self.get_logger().info("Starting person following...")
+                        self._transition_to(FollowerState.SWITCHING)
+                        self._call_switch_command()
+                    elif self.state == FollowerState.GREETING_IN_PROGRESS:
+                        # History already saved when person approached.
+                        # Just start switching to next person.
                         self._transition_to(FollowerState.SWITCHING)
                         self._call_switch_command()
         except Exception as e:
@@ -513,10 +520,7 @@ class PersonFollower(Node):
 
     def _handle_idle_state(self):
         """Handle IDLE state - wait for tracking system to be ready."""
-        if self.tracking_status_received:
-            self.get_logger().info("Tracking system ready, calling switch...")
-            self._transition_to(FollowerState.SWITCHING)
-            self._call_switch_command()
+        pass
 
     def _handle_switching_state(self):
         """Handle SWITCHING state - wait for tracking result."""
