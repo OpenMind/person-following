@@ -419,7 +419,10 @@ class PersonFollower(Node):
             with self.state_lock:
                 current_state = self.state
 
-            if current_state not in (FollowerState.IDLE, FollowerState.GREETING_IN_PROGRESS):
+            if current_state not in (
+                FollowerState.IDLE,
+                FollowerState.GREETING_IN_PROGRESS,
+            ):
                 self.get_logger().warning(
                     f"Robot is in Agile mode during {current_state.value} state, "
                     "switching to classical mode for stability."
@@ -432,7 +435,9 @@ class PersonFollower(Node):
 
                     request_msg.parameter = json.dumps({"data": True})
                     self.sport_publisher.publish(request_msg)
-                    self.get_logger().info("Sent command to switch to Classical Walk mode")
+                    self.get_logger().info(
+                        "Sent command to switch to Classical Walk mode"
+                    )
                 except Exception as e:
                     self.get_logger().error(f"Failed to switch to classical mode: {e}")
 
