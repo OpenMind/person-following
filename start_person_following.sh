@@ -192,7 +192,7 @@ echo ""
 export PYTHONUNBUFFERED=1
 
 setsid bash -lc \
-  "python3 -u '${PROJECT_ROOT}/src/tracked_person_publisher_ros.py' \
+  "python3 -u '${PROJECT_ROOT}/person_following/tracked_person_publisher_ros.py' \
     --yolo-det '${YOLO_DET}' \
     --yolo-seg '${YOLO_SEG}' \
     --color-topic '${COLOR_TOPIC}' \

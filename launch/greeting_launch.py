@@ -15,8 +15,9 @@ Requires colcon build to be run first for om_api and unitree_api packages.
 
 Usage:
     export ROBOT_TYPE=go2              # Choose robot type
-    export PROJECT_ROOT=/opt/person_following
-    ros2 launch person_following_sys go2_greeting_launch.py
+    colcon build
+    source install/setup.bash
+    ros2 launch launch/geeting_launch.py
 """
 
 import os
@@ -37,7 +38,9 @@ def generate_launch_description():
     Robot type is read from ROBOT_TYPE environment variable.
     Parameters are loaded from config/<ROBOT_TYPE>_params.yaml.
     """
-    project_root = os.environ.get("PROJECT_ROOT", "/opt/person_following")
+    launch_file_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(launch_file_dir)
+
     install_dir = os.path.join(project_root, "install")
     robot_type = os.environ.get("ROBOT_TYPE", "go2").lower()
     config_file = os.path.join(project_root, "config", f"{robot_type}_params.yaml")
@@ -76,7 +79,7 @@ def generate_launch_description():
             "-c",
             f"source /opt/ros/jazzy/setup.bash && "
             f"source {install_dir}/setup.bash && "
-            f"python3 {project_root}/src/tracked_person_publisher_ros.py "
+            f"python3 {project_root}/person_following/nodes/tracked_person_publisher_ros.py "
             f"--scan-topic /scan "
             f"--mode greeting "
             f"--cmd-port 2001 ",
@@ -103,7 +106,7 @@ def generate_launch_description():
                     "-c",
                     f"source /opt/ros/jazzy/setup.bash && "
                     f"source {install_dir}/setup.bash && "
-                    f"python3 {project_root}/src/person_follow_greet_geofence.py "
+                    f"python3 {project_root}/person_following/nodes/person_follow_greet.py "
                     f"--ros-args --params-file {config_file}",
                 ],
                 name="person_follow_greet",

@@ -42,7 +42,7 @@ url = "https://download.pytorch.org/whl/cu130"
 explicit = true
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["person_following"]
 asyncio_mode = "strict"
 addopts = "-v"
 
@@ -63,3 +63,11 @@ unfixable = []
 
 [tool.ruff.lint.pydocstyle]
 convention = "numpy"
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["person_following*"]

@@ -1,5 +1,4 @@
 
-# Production Dockerfile for Person Following System (Jetson Thor + ROS 2 Jazzy)
 FROM nvcr.io/nvidia/pytorch:25.10-py3
 
 SHELL ["/bin/bash", "-lc"]
@@ -13,18 +12,15 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PATH=/opt/venv/bin:/usr/local/bin:$PATH
 
 
-# Prefer the UCX/UCC that ships in the base image (HPC-X), then CUDA.
 ENV LD_LIBRARY_PATH=/opt/hpcx/ucx/lib:/opt/hpcx/ucc/lib:/usr/local/cuda/lib64:${LD_LIBRARY_PATH} \
     PATH=/usr/src/tensorrt/bin:/usr/local/cuda/bin:${VIRTUAL_ENV}/bin:${PATH}
 
-# Make sure ld.so can also find HPC-X libs
 RUN if [ -d /opt/hpcx/ucx/lib ] && [ -d /opt/hpcx/ucc/lib ]; then \
       printf '%s\n' /opt/hpcx/ucx/lib /opt/hpcx/ucc/lib > /etc/ld.so.conf.d/hpcx.conf && ldconfig; \
     fi
 
 COPY --from=docker.io/astral/uv:latest /uv /uvx /usr/local/bin/
 
-# System dependencies
 RUN set -eux; \
     apt-get update -o Acquire::Retries=5; \
     apt-get install -y --no-install-recommends --fix-missing \
@@ -51,7 +47,6 @@ RUN set -eux; \
     ; \
     rm -rf /var/lib/apt/lists/*
 
-# Install ROS 2 Jazzy
 RUN set -eux; \
     rm -rf /var/lib/apt/lists/*; \
     curl -fsSL https://raw.githubusercontent.com/ros/rosdistro/master/ros.key \
@@ -70,6 +65,7 @@ RUN set -eux; \
       ros-jazzy-launch \
       ros-jazzy-launch-ros \
       ros-jazzy-rmw-cyclonedds-cpp \
+      ros-jazzy-rosidl-generator-dds-idl \
       ros-jazzy-usb-cam \
       python3-rosdep \
       python3-colcon-common-extensions \
@@ -81,28 +77,23 @@ RUN set -eux; \
 
 WORKDIR ${PROJECT_ROOT}
 
-# Cache deps layer: copy only lock + pyproject first
-# (If you don't have uv.lock, remove it from this COPY and drop --locked below.)
 COPY pyproject.toml uv.lock ./
 
-# Create venv WITH system site-packages, then install deps from pyproject
 RUN uv venv "${VIRTUAL_ENV}" --python python3 --system-site-packages && \
     uv sync --locked --no-install-project --all-extras
 
-# Now copy the rest of the project
 COPY . ${PROJECT_ROOT}
 
-# Build ROS2 packages (om_api, unitree_api)
+RUN pip install -e .
+
 RUN source /opt/ros/jazzy/setup.bash && \
     cd ${PROJECT_ROOT} && \
-    colcon build --symlink-install --packages-select om_api unitree_api
+    colcon build --symlink-install --packages-select om_api unitree_api unitree_go
 
-# Dirs
 RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/launch && \
     chmod +x ${PROJECT_ROOT}/scripts/*.sh 2>/dev/null || true && \
-    chmod +x ${PROJECT_ROOT}/src/*.py 2>/dev/null || true
+    chmod +x ${PROJECT_ROOT}/person_following/*.py 2>/dev/null || true
 
-# Entrypoint - source both ROS and colcon workspace
 RUN printf '%s\n' \
   '#!/usr/bin/env bash' \
   'set -e' \

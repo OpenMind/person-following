@@ -49,7 +49,11 @@ from rclpy.qos import HistoryPolicy, QoSProfile, ReliabilityPolicy
 from sensor_msgs.msg import CameraInfo, Image, LaserScan
 from std_msgs.msg import String
 
-from person_following_command import Command, CommandServer, SharedStatus
+from person_following.controllers.person_following_command import (
+    Command,
+    CommandServer,
+    SharedStatus,
+)
 
 # Logging
 logging.basicConfig(
@@ -60,10 +64,10 @@ logger = logging.getLogger("tracked_person_publisher_ros")
 
 OperationMode = Literal["greeting", "following"]
 
-MODEL_DIR = str(Path(__file__).resolve().parents[1] / "model")
-ENGINE_DIR = str(Path(__file__).resolve().parents[1] / "engine")
-EXTRINSICS_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "extrinsics-files")
-INTRINSICS_CACHE_DIR = str(Path(__file__).resolve().parents[1] / "intrinsics-files")
+MODEL_DIR = str(Path(__file__).resolve().parents[2] / "model")
+ENGINE_DIR = str(Path(__file__).resolve().parents[2] / "engine")
+EXTRINSICS_CACHE_DIR = str(Path(__file__).resolve().parents[2] / "extrinsics-files")
+INTRINSICS_CACHE_DIR = str(Path(__file__).resolve().parents[2] / "intrinsics-files")
 
 
 def parse_args():
@@ -1469,7 +1473,7 @@ def main() -> None:
     logger.info("PERSON FOLLOWING SYSTEM - ROS 2")
     logger.info("=" * 60)
 
-    from model_manager import ModelManager
+    from person_following.managers.model_manager import ModelManager
 
     logger.info("Checking and preparing models...")
     model_manager = ModelManager(
@@ -1547,7 +1551,7 @@ def main() -> None:
 
     # Initialize person following system
     logger.info("Initializing person following system...")
-    from person_following_system import PersonFollowingSystem
+    from person_following.nodes.person_following_system import PersonFollowingSystem
 
     system = PersonFollowingSystem(
         yolo_detection_engine=args.yolo_det,
@@ -1929,8 +1933,10 @@ def main() -> None:
         while rclpy.ok() and not stop_event.is_set():
             color_frame, depth_frame, aux = camera.get_frames()
             if color_frame is None:
+                time.sleep(0.01)
                 continue
             if args.camera_mode == "realsense" and depth_frame is None:
+                time.sleep(0.01)
                 continue
 
             _drain_commands(color_frame, depth_frame, aux)

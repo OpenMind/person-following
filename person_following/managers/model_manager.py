@@ -192,6 +192,8 @@ class ModelManager:
         engine_path: Path,
         fp16: bool = True,
         workspace: int = 4096,
+        input_shape: Optional[str] = None,
+        input_name: str = "images",
     ) -> bool:
         """
         Compile ONNX model to TensorRT engine using trtexec.
@@ -206,6 +208,10 @@ class ModelManager:
             Enable FP16 precision.
         workspace : int
             Max workspace size in MB.
+        input_shape : str, optional
+            Input shape specification (e.g., "1x3x640x640").
+        input_name : str
+            Name of input tensor (default: "images").
 
         Returns
         -------
@@ -226,6 +232,8 @@ class ModelManager:
         logger.info(f"  Engine:    {engine_path}")
         logger.info(f"  FP16:      {fp16}")
         logger.info(f"  Workspace: {workspace} MB")
+        if input_shape:
+            logger.info(f"  Input Shape: {input_name}:{input_shape}")
         logger.info(f"  TRT Version: {self.trt_version}")
         logger.info("=" * 60)
 
@@ -244,6 +252,16 @@ class ModelManager:
 
         if fp16:
             cmd.append("--fp16")
+
+        if input_shape:
+            shape_spec = f"{input_name}:{input_shape}"
+            cmd.extend(
+                [
+                    f"--minShapes={shape_spec}",
+                    f"--optShapes={shape_spec}",
+                    f"--maxShapes={shape_spec}",
+                ]
+            )
 
         try:
             logger.info(f"Running: {' '.join(cmd)}")
@@ -351,6 +369,8 @@ class ModelManager:
                 engine_path,
                 fp16=config.get("fp16", True),
                 workspace=config.get("workspace", 4096),
+                input_shape=config.get("input_shape"),
+                input_name=config.get("input_name", "images"),
             )
 
             if not success:
