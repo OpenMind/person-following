@@ -87,7 +87,7 @@ RUN pip install -e .
 
 RUN source /opt/ros/jazzy/setup.bash && \
     cd ${PROJECT_ROOT} && \
-    colcon build --symlink-install --packages-select om_api unitree_api
+    colcon build --symlink-install --packages-select om_api unitree_api unitree_go
 
 RUN mkdir -p ${PROJECT_ROOT}/engine ${PROJECT_ROOT}/scripts ${PROJECT_ROOT}/launch && \
     chmod +x ${PROJECT_ROOT}/scripts/*.sh 2>/dev/null || true && \
