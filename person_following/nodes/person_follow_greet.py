@@ -26,8 +26,10 @@ from nav_msgs.msg import Odometry
 from om_api.msg import Paths
 from rclpy.logging import LoggingSeverity
 from rclpy.node import Node
+import zenoh
 from std_msgs.msg import String
 from unitree_api.msg import Request, RequestHeader, RequestIdentity
+from unitree_go.msg import SportModeState
 
 from person_following.managers.geofence_manager import GeofenceManager
 from person_following.utils.http_server import ModeControlHandler, ModeControlHTTPServer
@@ -66,6 +68,7 @@ class PersonFollower(Node):
     """
 
     OperationMode = Literal["greeting", "following"]
+    SPORT_API_ID_CLASSICWALK = 2049
 
     def __init__(self):
         """Initialize the PersonFollower ROS2 node."""
@@ -215,6 +218,9 @@ class PersonFollower(Node):
         self.odom_subscription = self.create_subscription(
             Odometry, "/odom", self.odom_callback, 10
         )
+        self.sport_mode_subscription = self.create_subscription(
+            SportModeState, "/sportmodestate", self.sport_mode_callback, 10
+        )
 
     def _init_state(self):
         """Initialize state machine and control variables."""
@@ -281,16 +287,32 @@ class PersonFollower(Node):
             self._http_server.shutdown()
             self._http_server.server_close()
 
-    # =========================================================================
-    # Operation Mode
-    # =========================================================================
     def get_operation_mode(self) -> "PersonFollower.OperationMode":
-        """Get current operation mode (thread-safe)."""
+        """
+        Get current operation mode (thread-safe).
+
+        Returns
+        -------
+        PersonFollower.OperationMode
+            The current operation mode ("greeting" or "following").
+        """
         with self.mode_lock:
             return self.operation_mode
 
     def set_operation_mode(self, mode: "PersonFollower.OperationMode") -> bool:
-        """Set operation mode and notify vision system."""
+        """
+        Set operation mode and notify vision system.
+
+        Parameters
+        ----------
+        mode : PersonFollower.OperationMode
+            The operation mode to set ("greeting" or "following").
+
+        Returns
+        -------
+        bool
+            True if mode was changed, False if it was already in the desired mode.
+        """
         with self.mode_lock:
             if self.operation_mode == mode:
                 return True
@@ -314,7 +336,14 @@ class PersonFollower(Node):
         return True
 
     def _notify_vision_mode_change(self, mode: "PersonFollower.OperationMode"):
-        """Notify vision system of mode change via HTTP."""
+        """
+        Notify vision system of mode change via HTTP.
+
+        Parameters
+        ----------
+        mode : PersonFollower.OperationMode
+            The new operation mode ("greeting" or "following").
+        """
         url = f"{self.cmd_base_url}/command"
         try:
             response = requests.post(
@@ -331,15 +360,26 @@ class PersonFollower(Node):
         except requests.exceptions.RequestException as e:
             self.get_logger().error(f"Vision mode change error: {e}")
 
-    # =========================================================================
-    # ROS Callbacks
-    # =========================================================================
     def odom_callback(self, msg: Odometry):
-        """Handle odometry updates for geofencing."""
+        """
+        Handle odometry updates for geofencing.
+
+        Parameters
+        ----------
+        msg : Odometry
+            The incoming odometry message containing the robot's current position.
+        """
         self.geofence_manager.handle_odom(msg)
 
     def status_callback(self, msg: String):
-        """Handle incoming tracking status updates."""
+        """
+        Handle incoming tracking status updates.
+
+        Parameters
+        ----------
+        msg : String
+            The incoming message containing tracking status in JSON format.
+        """
         try:
             self.tracking_status = json.loads(msg.data)
             self.tracking_status_received = True
@@ -347,21 +387,64 @@ class PersonFollower(Node):
             self.get_logger().error(f"Failed to parse tracking status: {e}")
 
     def paths_callback(self, msg: Paths):
-        """Handle incoming path availability updates from obstacle detection."""
+        """
+        Handle incoming path availability updates from obstacle detection.
+
+        Parameters
+        ----------
+        msg : Paths
+            The incoming message containing safe paths and blocked paths information.
+        """
         safe_paths = list(msg.paths)
         blocked_paths = set(msg.blocked_by_obstacle_idx) | set(
             msg.blocked_by_hazard_idx
         )
         self.last_paths_time = time.time()
 
-        # Update all components that need path safety info
         self.motion_controller.update_path_safety(safe_paths, blocked_paths)
         self.return_to_center.update_path_safety(
             safe_paths, blocked_paths, self.last_paths_time
         )
 
+    def sport_mode_callback(self, msg: SportModeState):
+        """
+        Handle incoming sport mode state messages.
+
+        Parameters
+        ----------
+        msg : SportModeState
+            The incoming sport mode state message containing the current mode of the robot.
+        """
+        if msg.error_code == 100:
+            with self.state_lock:
+                current_state = self.state
+
+            if current_state not in (FollowerState.IDLE, FollowerState.GREETING_IN_PROGRESS):
+                self.get_logger().warning(
+                    f"Robot is in Agile mode during {current_state.value} state, "
+                    "switching to classical mode for stability."
+                )
+                try:
+                    request_msg = Request()
+                    request_msg.header = RequestHeader()
+                    request_msg.header.identity = RequestIdentity()
+                    request_msg.header.identity.api_id = self.SPORT_API_ID_CLASSICWALK
+
+                    request_msg.parameter = json.dumps({"data": True})
+                    self.sport_publisher.publish(request_msg)
+                    self.get_logger().info("Sent command to switch to Classical Walk mode")
+                except Exception as e:
+                    self.get_logger().error(f"Failed to switch to classical mode: {e}")
+
     def position_callback(self, msg: PoseStamped):
-        """Handle incoming tracked person position updates."""
+        """
+        Handle incoming tracked person position updates.
+
+        Parameters
+        ----------
+        msg : PoseStamped
+            The incoming message containing the tracked person's position relative to the robot.
+        """
         if msg.pose.position.z == 0.0:
             return
 
@@ -376,7 +459,14 @@ class PersonFollower(Node):
             self._handle_approaching_position(msg)
 
     def _handle_following_position(self, msg: PoseStamped):
-        """Handle position updates in FOLLOWING mode."""
+        """
+        Handle position updates in FOLLOWING mode.
+
+        Parameters
+        ----------
+        msg : PoseStamped
+            The incoming message containing the tracked person's position relative to the robot.
+        """
         self.stop_sent = False
         self.is_tracking = True
 
@@ -390,7 +480,14 @@ class PersonFollower(Node):
         self.cmd_vel_publisher.publish(cmd_vel)
 
     def _handle_approaching_position(self, msg: PoseStamped):
-        """Handle position updates in APPROACHING mode."""
+        """
+        Handle position updates in APPROACHING mode.
+
+        Parameters
+        ----------
+        msg : PoseStamped
+            The incoming message containing the tracked person's position relative to the robot.
+        """
         self.last_valid_position_time = time.time()
 
         current_time = self.get_clock().now()
@@ -403,7 +500,6 @@ class PersonFollower(Node):
             msg, dt
         )
 
-        # If no safe path found, switch to next person
         if not path_safe:
             self._call_switch_command()
             self._transition_to(FollowerState.SEARCHING)
@@ -414,8 +510,15 @@ class PersonFollower(Node):
         )
         self.cmd_vel_publisher.publish(cmd_vel)
 
-    def _zenoh_person_greeting_callback(self, data):
-        """Handle incoming PersonGreetingStatus messages from Zenoh."""
+    def _zenoh_person_greeting_callback(self, data: zenoh.Sample):
+        """
+        Handle incoming PersonGreetingStatus messages from Zenoh.
+
+        Parameters
+        ----------
+        data : ZenohString
+            The incoming Zenoh message containing the person greeting status in JSON format.
+        """
         try:
             msg = PersonGreetingStatus.deserialize(data.payload.to_bytes())
             if msg.status == HandshakeCode.SWITCH:
@@ -435,7 +538,9 @@ class PersonFollower(Node):
             self.get_logger().error(f"Zenoh callback error: {e}")
 
     def state_machine_tick(self):
-        """Main state machine tick called periodically by timer."""
+        """
+        Main state machine tick called periodically by timer.
+        """
         state_msg = String()
         state_msg.data = self.state.value
         self.state_publisher.publish(state_msg)
@@ -457,7 +562,14 @@ class PersonFollower(Node):
                 self._handle_returning_to_center_state()
 
     def _transition_to(self, new_state: FollowerState):
-        """Transition to a new state."""
+        """
+        Transition to a new state.
+
+        Parameters
+        ----------
+        new_state : FollowerState
+            The state to transition to.
+        """
         old_state = self.state
         self.state = new_state
         self.state_entry_time = time.time()
@@ -862,7 +974,7 @@ class PersonFollower(Node):
             request_msg = Request()
             request_msg.header = RequestHeader()
             request_msg.header.identity = RequestIdentity()
-            request_msg.header.identity.api_id = 2049  # SPORT_API_ID_CLASSICWALK
+            request_msg.header.identity.api_id = self.SPORT_API_ID_CLASSICWALK
 
             request_msg.parameter = json.dumps({"data": True})
             self.sport_publisher.publish(request_msg)
@@ -876,7 +988,7 @@ class PersonFollower(Node):
             request_msg = Request()
             request_msg.header = RequestHeader()
             request_msg.header.identity = RequestIdentity()
-            request_msg.header.identity.api_id = 2049  # SPORT_API_ID_CLASSICWALK
+            request_msg.header.identity.api_id = self.SPORT_API_ID_CLASSICWALK
 
             request_msg.parameter = json.dumps({"data": False})
             self.sport_publisher.publish(request_msg)
