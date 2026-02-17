@@ -843,6 +843,8 @@ class Go2ROSCameraLidar:
         pts = pts_cv[:, ok]
         idx_ok = idx[ok]
         r_ok = r[ok]
+        x_ok = x_lidar[ok]
+        y_ok = y_lidar[ok]
         K = np.array(
             [[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]], dtype=np.float64
         )
@@ -857,10 +859,20 @@ class Go2ROSCameraLidar:
         )
         if not np.any(in_img):
             return None
+        uv_final = uv_int[in_img]
+        idx_final = idx_ok[in_img]
+        r_final = r_ok[in_img]
+        xy_final = np.column_stack([x_ok[in_img], y_ok[in_img]])
         return {
-            "lidar_uv": uv_int[in_img],
-            "lidar_scan_idx": idx_ok[in_img],
-            "lidar_ranges": r_ok[in_img],
+            # Original keys (used by draw_visualization, _get_distance_from_lidar)
+            "lidar_uv": uv_final,
+            "lidar_scan_idx": idx_final,
+            "lidar_ranges": r_final,
+            # Keys expected by lidar_tracker.py cluster_in_bbox()
+            "uv": uv_final,
+            "idx": idx_final,
+            "r": r_final,
+            "xy": xy_final,
         }
 
     def get_frames(
@@ -886,6 +898,24 @@ class Go2ROSCameraLidar:
         aux = None
         if scan is not None:
             aux = self._project_scan(scan, frame.shape[:2])
+            # Add full LiDAR XY points for KF tracker
+            if aux is not None:
+                ranges_full = np.array(scan.ranges, dtype=np.float64)
+                n = len(ranges_full)
+                if n > 0:
+                    angles = (
+                        scan.angle_min
+                        + np.arange(n, dtype=np.float64) * scan.angle_increment
+                    )
+                    valid = (
+                        np.isfinite(ranges_full)
+                        & (ranges_full > float(scan.range_min))
+                        & (ranges_full < float(scan.range_max))
+                    )
+                    if np.any(valid):
+                        r = ranges_full[valid]
+                        a = angles[valid]
+                        aux["scan_xy"] = np.column_stack([r * np.cos(a), r * np.sin(a)])
         return frame, None, aux
 
     def stop(self):
@@ -1043,6 +1073,142 @@ def compute_lateral_offset(bbox, distance: float, fx: float, cx: float) -> float
     return (pixel_offset * distance) / fx
 
 
+def project_lidar_xy_to_uv(
+    xy_pts: np.ndarray,
+    R_CL: np.ndarray,
+    t_CL: np.ndarray,
+    fx: float,
+    fy: float,
+    cx: float,
+    cy: float,
+    W: int,
+    H: int,
+):
+    """
+    Project LiDAR XY points (2D, z=0) onto camera image plane.
+
+    Uses the same extrinsic math as Go2ROSCameraLidar._project_scan()
+    but works on arbitrary XY coordinates (not a full LaserScan).
+
+    Parameters
+    ----------
+    xy_pts : np.ndarray
+        (K, 2) array of XY points in LiDAR frame.
+    R_CL, t_CL : np.ndarray
+        Camera-to-LiDAR rotation (3x3) and translation (3x1).
+    fx, fy, cx, cy : float
+        Camera intrinsics.
+    W, H : int
+        Image width and height.
+
+    Returns
+    -------
+    np.ndarray or None
+        (M, 2) integer UV coordinates that fall inside the image,
+        or None if nothing projects into view.
+    """
+    if xy_pts is None or len(xy_pts) == 0:
+        return None
+
+    N = len(xy_pts)
+    P_L = np.vstack(
+        [
+            xy_pts[:, 0],
+            xy_pts[:, 1],
+            np.zeros(N),
+        ]
+    )  # (3, N)
+
+    P_C = R_CL.T @ (P_L - t_CL)
+    pts_cv = np.vstack([-P_C[1], -P_C[2], P_C[0]])
+    Z = pts_cv[2]
+    ok = Z > 0.01
+    if not np.any(ok):
+        return None
+
+    pts = pts_cv[:, ok]
+    K_mat = np.array([[fx, 0, cx], [0, fy, cy], [0, 0, 1]], dtype=np.float64)
+    uvw = K_mat @ pts
+    uv = (uvw[:2] / uvw[2:3]).T
+    uv_int = np.round(uv).astype(np.int32)
+
+    in_img = (
+        (uv_int[:, 0] >= 0)
+        & (uv_int[:, 0] < W)
+        & (uv_int[:, 1] >= 0)
+        & (uv_int[:, 1] < H)
+    )
+    return uv_int[in_img] if np.any(in_img) else None
+
+
+def _draw_lidar_overlay(display, result, target_bbox, W, H):
+    """
+    Draw LiDAR overlay: all scan points + tracked cluster + KF position.
+
+    Colors:
+      YELLOW (0,255,255) = all projected LiDAR scan points
+      GREEN  (0,255,0)   = scan points inside target bbox
+      MAGENTA(255,0,255) = KF-tracked cluster points
+      CYAN   (255,255,0) = KF estimated position marker
+    """
+    lidar_uv = result.get("lidar_uv", None)
+    tracked_uv = result.get("lidar_tracked_uv", None)
+    kf_uv = result.get("lidar_kf_uv", None)
+    lidar_source = result.get("lidar_source", "")
+    lidar_lost = result.get("lidar_lost_frames", 0)
+
+    # 1) Draw ALL projected scan points (yellow / green inside bbox)
+    if lidar_uv is not None:
+        uv = np.asarray(lidar_uv)
+        if uv.ndim == 2 and uv.shape[1] == 2:
+            max_pts = 2000
+            step = max(1, len(uv) // max_pts) if len(uv) > max_pts else 1
+            for idx in range(0, len(uv), step):
+                ui, vi = int(uv[idx, 0]), int(uv[idx, 1])
+                if ui < 0 or ui >= W or vi < 0 or vi >= H:
+                    continue
+                inside = False
+                if target_bbox is not None:
+                    bx1, by1, bx2, by2 = target_bbox
+                    inside = (bx1 <= ui < bx2) and (by1 <= vi < by2)
+                color = (0, 255, 0) if inside else (0, 255, 255)
+                cv2.circle(display, (ui, vi), 2, color, -1)
+
+    # 2) Draw KF-tracked cluster points (MAGENTA, larger)
+    if tracked_uv is not None:
+        for pt in tracked_uv:
+            cv2.circle(display, (int(pt[0]), int(pt[1])), 4, (255, 0, 255), -1)
+
+    # 3) Draw KF position crosshair (CYAN)
+    if kf_uv is not None and len(kf_uv) > 0:
+        ku, kv = int(kf_uv[0, 0]), int(kf_uv[0, 1])
+        cv2.drawMarker(display, (ku, kv), (255, 255, 0), cv2.MARKER_CROSS, 30, 2)
+        cv2.circle(display, (ku, kv), 16, (255, 255, 0), 2)
+        cv2.putText(
+            display,
+            "KF",
+            (ku + 18, kv - 8),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 255, 0),
+            2,
+        )
+
+    # 4) Draw predict-only ring (when KF has no measurement)
+    if kf_uv is not None and len(kf_uv) > 0 and lidar_source in ("none", ""):
+        ku, kv = int(kf_uv[0, 0]), int(kf_uv[0, 1])
+        cv2.circle(display, (ku, kv), 24, (0, 165, 255), 1)
+        cv2.putText(
+            display,
+            f"PREDICT ({lidar_lost}f)",
+            (ku + 18, kv + 15),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.4,
+            (0, 165, 255),
+            1,
+        )
+
+
 def draw_visualization(
     frame,
     result,
@@ -1096,22 +1262,9 @@ def draw_visualization(
     target_bbox = result.get("bbox", None) if result.get("target_found") else None
     status = result.get("status", "UNKNOWN")
 
-    # Draw projected LiDAR points (Go2 mode)
-    if is_go2_mode and lidar_uv is not None:
-        uv = np.asarray(lidar_uv)
-        if uv.ndim == 2 and uv.shape[1] == 2:
-            max_pts = 2000
-            step = max(1, len(uv) // max_pts) if len(uv) > max_pts else 1
-            for idx in range(0, len(uv), step):
-                ui, vi = int(uv[idx, 0]), int(uv[idx, 1])
-                if ui < 0 or ui >= W or vi < 0 or vi >= H:
-                    continue
-                inside = False
-                if target_bbox is not None:
-                    bx1, by1, bx2, by2 = target_bbox
-                    inside = (ui >= bx1) and (ui < bx2) and (vi >= by1) and (vi < by2)
-                color = (0, 255, 0) if inside else (0, 255, 255)
-                cv2.circle(display, (ui, vi), 2, color, -1)
+    # Draw projected LiDAR overlay (Go2 mode)
+    if is_go2_mode:
+        _draw_lidar_overlay(display, result, target_bbox, W, H)
 
     # Draw SWITCHING mode visualization (greeting mode only)
     if status == "SWITCHING" and operation_mode == "greeting":
@@ -1264,10 +1417,19 @@ def draw_visualization(
         cv2.line(display, (cx - 20, cy), (cx + 20, cy), (0, 0, 255), 2)
         cv2.line(display, (cx, cy - 20), (cx, cy + 20), (0, 0, 255), 2)
 
-    # Draw candidates (SEARCHING mode)
+    # Draw candidates (SEARCHING mode) - orange boxes
     for cand in system.get_candidates_info():
         x1, y1, x2, y2 = cand["bbox"]
         cv2.rectangle(display, (x1, y1), (x2, y2), (0, 165, 255), 2)
+        cv2.putText(
+            display,
+            "SEARCH",
+            (x1, y1 - 20),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.45,
+            (0, 165, 255),
+            1,
+        )
         cv2.putText(
             display,
             f"L:{cand['clothing_sim']:.2f} C:{cand['clip_sim']:.2f}",
@@ -1362,6 +1524,37 @@ def draw_visualization(
         2,
     )
 
+    # LiDAR tracker status
+    lidar_active = result.get("lidar_active", False)
+    if lidar_active or is_go2_mode:
+        y_pos += line_height
+        lidar_src = result.get("lidar_source", "n/a")
+        lidar_lost = result.get("lidar_lost_frames", 0)
+        lidar_kf_pts = result.get("lidar_cluster_pts", 0)
+
+        if lidar_src == "camera_synced":
+            lidar_color = (0, 255, 0)
+            lidar_label = f"LiDAR: synced ({lidar_kf_pts}pts)"
+        elif lidar_src == "lidar":
+            lidar_color = (255, 0, 255)
+            lidar_label = f"LiDAR: KF tracking ({lidar_kf_pts}pts)"
+        elif lidar_src == "none" and lidar_active:
+            lidar_color = (0, 165, 255)
+            lidar_label = f"LiDAR: predict-only (lost {lidar_lost}f)"
+        else:
+            lidar_color = (128, 128, 128)
+            lidar_label = "LiDAR: inactive"
+
+        cv2.putText(
+            display,
+            lidar_label,
+            (10, y_pos),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            lidar_color,
+            2,
+        )
+
     # History count (greeting mode only)
     if operation_mode == "greeting":
         y_pos += line_height
@@ -1416,25 +1609,34 @@ def draw_visualization(
 
     if status == "SEARCHING":
         time_lost = result.get("time_lost", 0)
+        tracking_src = result.get("tracking_source", "")
+        lidar_tracking = tracking_src == "lidar_searching"
+
         if operation_mode == "greeting":
             searching_timeout = getattr(system, "searching_timeout", 5.0)
-            cv2.putText(
-                display,
-                f"SEARCHING... ({time_lost:.1f}s / {searching_timeout:.1f}s)",
-                (W // 2 - 100, H // 2),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 165, 255),
-                2,
-            )
+            search_text = f"SEARCHING... ({time_lost:.1f}s / {searching_timeout:.1f}s)"
         else:
+            search_text = f"SEARCHING... ({time_lost:.1f}s)"
+
+        cv2.putText(
+            display,
+            search_text,
+            (W // 2 - 100, H // 2),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 165, 255),
+            2,
+        )
+
+        # Show LiDAR-assisted searching indicator
+        if lidar_tracking:
             cv2.putText(
                 display,
-                f"SEARCHING... ({time_lost:.1f}s)",
-                (W // 2 - 80, H // 2),
+                "LiDAR: tracking position",
+                (W // 2 - 80, H // 2 + 25),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.7,
-                (0, 165, 255),
+                0.5,
+                (255, 0, 255),
                 2,
             )
 
@@ -1563,6 +1765,8 @@ def main() -> None:
         search_interval=args.search_interval,
         lidar_cluster_range_jump=args.lidar_range_jump,
         lidar_cluster_min_size=args.lidar_min_cluster_size,
+        # LiDAR KF tracker — enabled for go2 camera mode
+        use_lidar_tracker=(args.camera_mode == "go2"),
         # History options
         max_history_size=args.max_history_size,
         history_file=args.history_file,
@@ -1959,6 +2163,38 @@ def main() -> None:
                     }
 
             result = system.process_frame(color_frame, depth_frame, aux)
+
+            # Inject LiDAR KF visualization data (project XY → image UV)
+            if hasattr(camera, "R_CL") and result.get("lidar_active", False):
+                H_img, W_img = color_frame.shape[:2]
+                cluster_xy = result.get("lidar_cluster_xy", None)
+                if cluster_xy is not None:
+                    result["lidar_tracked_uv"] = project_lidar_xy_to_uv(
+                        cluster_xy,
+                        camera.R_CL,
+                        camera.t_CL,
+                        camera.fx,
+                        camera.fy,
+                        camera.cx,
+                        camera.cy,
+                        W_img,
+                        H_img,
+                    )
+                kf_pos = result.get("lidar_kf_position_xy", None)
+                if kf_pos is not None:
+                    kf_arr = np.array([[kf_pos[0], kf_pos[1]]])
+                    result["lidar_kf_uv"] = project_lidar_xy_to_uv(
+                        kf_arr,
+                        camera.R_CL,
+                        camera.t_CL,
+                        camera.fx,
+                        camera.fy,
+                        camera.cx,
+                        camera.cy,
+                        W_img,
+                        H_img,
+                    )
+
             status = result.get("status", "INACTIVE")
 
             current_time = time.time()
@@ -2002,6 +2238,8 @@ def main() -> None:
                 and result.get("distance") is not None
             )
 
+            tracking_source = result.get("tracking_source", "camera")
+
             x_offset, distance = 0.0, 0.0
             if is_tracked:
                 distance = float(result["distance"])
@@ -2020,6 +2258,30 @@ def main() -> None:
                         approached = True
                 else:
                     is_tracked = False
+
+            # LiDAR fallback: target_found but no camera bbox
+            # OR: SEARCHING mode but LiDAR still has position
+            if (
+                not is_tracked
+                and result.get("target_found", False)
+                and tracking_source in ("lidar", "lidar_predict")
+            ):
+                lidar_pos = result.get("lidar_position")
+                if lidar_pos:
+                    distance = float(lidar_pos.get("z", 0))
+                    x_offset = float(lidar_pos.get("x", 0))
+                    if distance > 0.1:
+                        is_tracked = True
+
+            # SEARCHING mode with LiDAR position: publish position so
+            # robot keeps following while clothing/CLIP re-identifies
+            if not is_tracked and tracking_source == "lidar_searching":
+                lidar_pos = result.get("lidar_position")
+                if lidar_pos:
+                    distance = float(lidar_pos.get("z", 0))
+                    x_offset = float(lidar_pos.get("x", 0))
+                    if distance > 0.1:
+                        is_tracked = True
 
             if auto_enroll and status == "INACTIVE":
                 try:

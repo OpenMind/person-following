@@ -47,6 +47,11 @@ class PersonFollowingSystem:
         search_interval: float = 0.33,
         lidar_cluster_range_jump: float = 0.35,
         lidar_cluster_min_size: int = 4,
+        # LiDAR KF tracker (only for go2/rtsp camera sources)
+        use_lidar_tracker: bool = False,
+        lidar_search_radius: float = 1.0,
+        lidar_max_lost_frames: int = 30,
+        lidar_jump_threshold: float = 0.5,
         # History settings
         max_history_size: int = 5,
         history_file: str = None,
@@ -93,6 +98,21 @@ class PersonFollowingSystem:
 
         self.lidar_cluster_range_jump = lidar_cluster_range_jump
         self.lidar_cluster_min_size = lidar_cluster_min_size
+
+        # LiDAR cluster tracker (KF-based fallback)
+        self.lidar_tracker = None
+        self._lidar_needs_enroll = False
+        if use_lidar_tracker:
+            from lidar_tracker import LidarTracker
+
+            self.lidar_tracker = LidarTracker(
+                range_jump=lidar_cluster_range_jump,
+                min_cluster_size=lidar_cluster_min_size,
+                search_radius=lidar_search_radius,
+                max_lost_frames=lidar_max_lost_frames,
+                jump_threshold=lidar_jump_threshold,
+            )
+            logger.info("  - LiDAR KF tracker: ENABLED")
 
         # History management
         self.max_history_size = max_history_size
@@ -1030,6 +1050,21 @@ class PersonFollowingSystem:
                 )
             )
 
+        # Add LiDAR tracker status AFTER state processing
+        # (so get_status reflects current frame's update, not stale data)
+        if self.lidar_tracker is not None:
+            lt_status = self.lidar_tracker.get_status()
+            for k, v in lt_status.items():
+                # Don't overwrite keys already set by state processors
+                # e.g. lidar_cluster_pts from _get_distance() vs KF tracker
+                if k not in result:
+                    result[k] = v
+            # Always update these visualization-critical keys
+            result["lidar_active"] = lt_status.get("lidar_active", False)
+            result["lidar_source"] = lt_status.get("lidar_source", "none")
+            result["lidar_cluster_xy"] = lt_status.get("lidar_cluster_xy")
+            result["lidar_kf_position_xy"] = lt_status.get("lidar_kf_position_xy")
+
         return result
 
     def _process_switching(
@@ -1211,6 +1246,11 @@ class PersonFollowingSystem:
 
         self.target.initialize(candidate["track_id"], candidate["distance"], timestamp)
 
+        # Enroll LiDAR tracker for new target (deferred to next frame with bbox)
+        if self.lidar_tracker is not None:
+            self.lidar_tracker.clear()
+            self._lidar_needs_enroll = True
+
         if clothing_feat is not None:
             bucket = self.target._get_bucket(candidate["distance"])
             self.target.save_feature(
@@ -1248,8 +1288,9 @@ class PersonFollowingSystem:
         """
         Process frame during TRACKING_ACTIVE state.
 
-        Updates target position, extracts and saves features at appropriate
-        distance buckets, detects if target is lost.
+        Camera is primary. When camera bbox is available, LiDAR syncs to it.
+        When camera bbox is lost, LiDAR KF continues tracking.
+        When both are lost, transitions to SEARCHING.
 
         Parameters
         ----------
@@ -1271,8 +1312,8 @@ class PersonFollowingSystem:
         Returns
         -------
         dict
-            Tracking result with 'target_found', 'bbox', 'distance', 'direction',
-            'feature_saved', 'within_margin', 'lidar_cluster_pts', 'lidar_bbox_pts'.
+            Tracking result with 'target_found', 'bbox', 'distance',
+            'tracking_source', LiDAR fields.
         """
         target_track = None
         for track in tracks:
@@ -1280,64 +1321,161 @@ class PersonFollowingSystem:
                 target_track = track
                 break
 
-        if target_track is None:
-            self.target.mark_lost(timestamp)
-            logger.info(f"Target lost (track_id={self.target.track_id})")
-            return {"target_found": False}
+        # Get scan_xy for LiDAR tracker
+        scan_xy = aux.get("scan_xy", np.empty((0, 2))) if aux else np.empty((0, 2))
+        has_lidar = self.lidar_tracker is not None
 
-        x1, y1, x2, y2 = map(int, target_track[:4])
-        x1, y1 = max(0, x1), max(0, y1)
-        x2, y2 = min(W, x2), min(H, y2)
-        bbox = (x1, y1, x2, y2)
+        # ── Deferred LiDAR enrollment after switch ──
+        if (
+            has_lidar
+            and self._lidar_needs_enroll
+            and target_track is not None
+            and aux is not None
+        ):
+            x1t, y1t, x2t, y2t = map(int, target_track[:4])
+            x1t, y1t = max(0, x1t), max(0, y1t)
+            x2t, y2t = min(W, x2t), min(H, y2t)
+            enroll_bbox = (x1t, y1t, x2t, y2t)
+            self.lidar_tracker.enroll(enroll_bbox, aux, timestamp=timestamp)
+            self._lidar_needs_enroll = False
 
-        current_distance, cluster_pts, bbox_pts = self._get_distance(
-            bbox, depth_frame, aux
-        )
-        direction = self.target.detect_movement_direction(current_distance, timestamp)
+        # ── Camera has the bbox ──
+        if target_track is not None:
+            x1, y1, x2, y2 = map(int, target_track[:4])
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(W, x2), min(H, y2)
+            bbox = (x1, y1, x2, y2)
 
-        should_save, bucket, save_dir = self.target.should_save_feature(
-            current_distance, direction, timestamp, bbox, W, H
-        )
-
-        feature_saved = False
-        if should_save:
-            crop = color_frame[y1:y2, x1:x2]
-            mask, clothing_feat, clip_emb, mask_coverage, _ = self._extract_features(
-                crop
+            current_distance, cluster_pts, bbox_pts = self._get_distance(
+                bbox, depth_frame, aux
             )
-            if clothing_feat:
-                if self.target.save_feature(
-                    bucket, save_dir, clothing_feat, clip_emb, mask_coverage, timestamp
-                ):
-                    feature_saved = True
-                    logger.info(
-                        f"Saved @{bucket:.1f}m [{save_dir}] mask:{mask_coverage:.1f}%"
-                    )
+            direction = self.target.detect_movement_direction(
+                current_distance, timestamp
+            )
 
-        self.target.frames_tracked += 1
-        is_within_margin, _ = self.target.is_within_frame_margin(bbox, W, H)
+            should_save, bucket, save_dir = self.target.should_save_feature(
+                current_distance, direction, timestamp, bbox, W, H
+            )
 
-        result = {
-            "target_found": True,
-            "bbox": bbox,
-            "distance": current_distance,
-            "direction": direction,
-            "feature_saved": feature_saved,
-            "within_margin": is_within_margin,
-            "lidar_cluster_pts": cluster_pts,
-            "lidar_bbox_pts": bbox_pts,
-            "pending_verification": self.pending_verification,
-        }
-
-        # Background verification
-        if self.pending_verification:
-            result.update(
-                self._run_background_verification(
-                    color_frame, bbox, current_distance, timestamp
+            feature_saved = False
+            if should_save:
+                crop = color_frame[y1:y2, x1:x2]
+                mask, clothing_feat, clip_emb, mask_coverage, _ = (
+                    self._extract_features(crop)
                 )
+                if clothing_feat:
+                    if self.target.save_feature(
+                        bucket,
+                        save_dir,
+                        clothing_feat,
+                        clip_emb,
+                        mask_coverage,
+                        timestamp,
+                    ):
+                        feature_saved = True
+                        logger.info(
+                            f"Saved @{bucket:.1f}m [{save_dir}] "
+                            f"mask:{mask_coverage:.1f}%"
+                        )
+
+            self.target.frames_tracked += 1
+            is_within_margin, _ = self.target.is_within_frame_margin(bbox, W, H)
+
+            # Update LiDAR tracker (sync with bbox)
+            lidar_result = None
+            if has_lidar:
+                try:
+                    lidar_result = self.lidar_tracker.update(
+                        scan_xy, aux, bbox=bbox, timestamp=timestamp
+                    )
+                except Exception as e:
+                    logger.error(f"[LIDAR] update (camera path) failed: {e}")
+
+            result = {
+                "target_found": True,
+                "tracking_source": "camera",
+                "bbox": bbox,
+                "distance": current_distance,
+                "direction": direction,
+                "feature_saved": feature_saved,
+                "within_margin": is_within_margin,
+                "lidar_cluster_pts": cluster_pts,
+                "lidar_bbox_pts": bbox_pts,
+                "pending_verification": self.pending_verification,
+            }
+
+            if lidar_result and lidar_result.active:
+                result["lidar_distance"] = lidar_result.distance
+                result["lidar_speed"] = lidar_result.speed
+                result["lidar_drift"] = lidar_result.drift_detected
+                result["lidar_jump"] = lidar_result.jump_detected
+                result["lidar_bbox_overlap"] = lidar_result.bbox_overlap
+
+            # Background verification
+            if self.pending_verification:
+                result.update(
+                    self._run_background_verification(
+                        color_frame, bbox, current_distance, timestamp
+                    )
+                )
+
+            return result
+
+        # ── Camera lost the bbox ──
+
+        # Try LiDAR: keep position alive BUT transition to SEARCHING
+        # so clothing/CLIP re-identification runs in background.
+        # LiDAR is a position bridge, NOT a substitute for visual identity.
+        if has_lidar and self.lidar_tracker.is_active:
+            try:
+                lidar_result = self.lidar_tracker.update(
+                    scan_xy, aux, bbox=None, timestamp=timestamp
+                )
+            except Exception as e:
+                logger.error(f"[LIDAR] update (fallback path) failed: {e}")
+                lidar_result = None
+
+            if lidar_result is not None and lidar_result.jump_detected:
+                # Jump without camera verification → can't trust KF position
+                # Clear LiDAR but still transition to SEARCHING for re-id
+                logger.warning(
+                    "[LIDAR-FALLBACK] Jump detected without bbox → clearing KF, "
+                    "transitioning to SEARCHING (camera re-id only)"
+                )
+                self.lidar_tracker.clear()
+
+            # Transition to SEARCHING — clothing/CLIP will try to re-identify
+            self.target.mark_lost(timestamp)
+            logger.info(
+                "[LIDAR-FALLBACK] Camera lost bbox, LiDAR active → SEARCHING "
+                "(LiDAR provides position while searching)"
             )
 
-        return result
+            # Include LiDAR position so robot can keep following during search
+            lidar_pos = None
+            if lidar_result is not None and lidar_result.active:
+                lidar_pos = self.lidar_tracker.get_position_for_publish()
+
+            return {
+                "target_found": False,
+                "tracking_source": "lidar_searching",
+                "lidar_position": lidar_pos,
+                "distance": (
+                    lidar_result.distance
+                    if lidar_result and lidar_result.active
+                    else 0.0
+                ),
+                "lidar_cluster_pts": lidar_result.cluster_pts if lidar_result else 0,
+                "lidar_predict_only": (
+                    lidar_result.predict_only if lidar_result else True
+                ),
+                "lidar_frames_lost": lidar_result.frames_lost if lidar_result else 0,
+            }
+
+        # No LiDAR tracker or not enrolled → original behavior
+        self.target.mark_lost(timestamp)
+        logger.info(f"Target lost (track_id={self.target.track_id})")
+        return {"target_found": False, "tracking_source": "none"}
 
     def _run_background_verification(
         self, color_frame, bbox, distance, timestamp
@@ -1418,8 +1556,14 @@ class PersonFollowingSystem:
         Process frame during SEARCHING state.
 
         Attempts to re-identify lost target using clothing and CLIP features.
-        In greeting mode, times out after searching_timeout. In following mode,
-        searches indefinitely.
+        Meanwhile, LiDAR KF continues tracking and publishing position so the
+        robot can keep following the person's last known trajectory.
+
+        Jump detection during SEARCHING:
+        - Jump detected → INACTIVE (can't trust LiDAR without camera confirmation)
+
+        Re-identification success:
+        - Resume camera tracking + re-enroll LiDAR from new bbox
 
         Parameters
         ----------
@@ -1441,9 +1585,51 @@ class PersonFollowingSystem:
         Returns
         -------
         dict
-            Search result with 'target_found', 'time_lost', 'candidates_checked',
-            'bbox'/'distance' if re-identified, 'timeout_inactive' if timed out.
+            Search result with LiDAR position, tracking_source, re-id results.
         """
+        # ── LiDAR KF update (every frame, keeps position alive) ──
+        scan_xy = aux.get("scan_xy", np.empty((0, 2))) if aux else np.empty((0, 2))
+        has_lidar = self.lidar_tracker is not None
+        lidar_pos = None
+        lidar_info = {}
+
+        if has_lidar and self.lidar_tracker.is_active:
+            try:
+                lidar_result = self.lidar_tracker.update(
+                    scan_xy, aux, bbox=None, timestamp=timestamp
+                )
+            except Exception as e:
+                logger.error(f"[LIDAR] update in SEARCHING failed: {e}")
+                lidar_result = None
+
+            if lidar_result is not None:
+                if lidar_result.jump_detected:
+                    # Jump without camera → can't trust position
+                    # Clear KF but keep searching via clothing/CLIP
+                    logger.warning(
+                        "[LIDAR-SEARCH] Jump detected → clearing KF, "
+                        "continuing search (no position published)"
+                    )
+                    self.lidar_tracker.clear()
+                    lidar_info = {"tracking_source": "none"}
+
+                elif lidar_result.active:
+                    lidar_pos = self.lidar_tracker.get_position_for_publish()
+                    lidar_info = {
+                        "tracking_source": "lidar_searching",
+                        "lidar_position": lidar_pos,
+                        "lidar_cluster_pts": lidar_result.cluster_pts,
+                        "lidar_predict_only": lidar_result.predict_only,
+                        "lidar_frames_lost": lidar_result.frames_lost,
+                    }
+                elif not lidar_result.active:
+                    # LiDAR auto-cleared (lost too long)
+                    lidar_info = {
+                        "tracking_source": "none",
+                    }
+                    logger.info("[LIDAR-SEARCH] LiDAR also lost target")
+
+        # ── Searching timeout (greeting mode) ──
         if self.operation_mode == "greeting":
             time_lost = self.target.get_time_lost(timestamp)
             if time_lost >= self.searching_timeout:
@@ -1451,13 +1637,16 @@ class PersonFollowingSystem:
                     f"Searching timeout ({time_lost:.1f}s >= {self.searching_timeout}s), going inactive"
                 )
                 self.clear_target()
-                return {
+                result = {
                     "target_found": False,
                     "timeout_inactive": True,
                     "time_lost": time_lost,
                     "saved_to_history": False,
                 }
+                result.update(lidar_info)
+                return result
 
+        # ── Build candidate list for clothing/CLIP re-identification ──
         self.all_candidates_info = []
         candidates = []
         track_bbox_map = {}
@@ -1484,11 +1673,13 @@ class PersonFollowingSystem:
         if not candidates:
             self.target.mark_lost(timestamp)
             self.cached_search_result = None
-            return {
+            result = {
                 "target_found": False,
                 "candidates_checked": 0,
                 "time_lost": self.target.get_time_lost(timestamp),
             }
+            result.update(lidar_info)
+            return result
 
         time_since_last_search = timestamp - self.last_search_time
         should_run_search = time_since_last_search >= self.search_interval
@@ -1508,6 +1699,7 @@ class PersonFollowingSystem:
                 result["bbox"] = track_bbox_map[cached["matched_track_id"]]
             result["time_lost"] = self.target.get_time_lost(timestamp)
             result["throttled"] = True
+            result.update(lidar_info)
             return result
 
         self.last_search_time = timestamp
@@ -1597,6 +1789,7 @@ class PersonFollowingSystem:
                 "time_lost": self.target.get_time_lost(timestamp),
                 "candidates_info": candidates_info_cache,
             }
+            result.update(lidar_info)
             self.cached_search_result = result
             return result
 
@@ -1620,6 +1813,7 @@ class PersonFollowingSystem:
                     "time_lost": self.target.get_time_lost(timestamp),
                     "candidates_info": candidates_info_cache,
                 }
+                result.update(lidar_info)
                 self.cached_search_result = result
                 return result
             clip_passed.sort(key=lambda r: r["clip_sim"], reverse=True)
@@ -1628,9 +1822,21 @@ class PersonFollowingSystem:
             stage1_passed.sort(key=lambda r: r["clothing_sim"], reverse=True)
             best = stage1_passed[0]
 
+        # ── RE-IDENTIFIED! Resume camera tracking ──
         self.target.resume_tracking(best["person"]["track_id"])
         logger.info(f"RE-IDENTIFIED: Track {best['person']['track_id']}")
         self.cached_search_result = None
+
+        # Re-enroll LiDAR tracker from the re-identified bbox
+        if has_lidar and aux is not None:
+            try:
+                self.lidar_tracker.clear()
+                lidar_ok = self.lidar_tracker.enroll(
+                    best["person"]["bbox"], aux, timestamp=timestamp
+                )
+                logger.info(f"  LiDAR re-enrolled after re-id: {lidar_ok}")
+            except Exception as e:
+                logger.error(f"  LiDAR re-enroll failed: {e}")
 
         return {
             "target_found": True,
@@ -1723,6 +1929,15 @@ class PersonFollowingSystem:
             logger.info(
                 f"Target enrolled: track_id={target['track_id']}, dist={target['distance']:.2f}m"
             )
+            # Enroll LiDAR tracker
+            if self.lidar_tracker is not None and aux is not None:
+                try:
+                    lidar_ok = self.lidar_tracker.enroll(
+                        target["bbox"], aux, timestamp=timestamp
+                    )
+                    logger.info(f"  LiDAR tracker enrolled: {lidar_ok}")
+                except Exception as e:
+                    logger.error(f"  LiDAR tracker enroll FAILED: {e}")
             return True
         return False
 
@@ -1734,6 +1949,8 @@ class PersonFollowingSystem:
         self.target.BUCKET_SPACING = self.bucket_spacing
         self.target.operation_mode = self.operation_mode
         self.pending_verification = False
+        if self.lidar_tracker is not None:
+            self.lidar_tracker.clear()
         logger.info("Target cleared")
 
     def get_status(self) -> dict:
@@ -1763,6 +1980,8 @@ class PersonFollowingSystem:
                 self.switch_state.get_summary() if self.switch_state.active else None
             )
             status["searching_timeout"] = self.searching_timeout
+        if self.lidar_tracker is not None:
+            status.update(self.lidar_tracker.get_status())
         return status
 
     def get_all_tracks(self) -> List[dict]:
