@@ -71,6 +71,27 @@ class GeofenceManager:
         self.current_yaw: float = 0.0
         self.odom_received = False
 
+    def _is_valid_position(self, x: float, y: float) -> bool:
+        """
+        Check if position values are valid (not NaN or infinity).
+
+        Parameters
+        ----------
+        x, y : float
+            Position coordinates
+
+        Returns
+        -------
+        bool
+            True if position is valid
+        """
+        return (
+            math.isfinite(x)
+            and math.isfinite(y)
+            and not math.isnan(x)
+            and not math.isnan(y)
+        )
+
     def handle_odom(self, msg: Odometry):
         """
         Handle odometry updates.
@@ -80,10 +101,17 @@ class GeofenceManager:
         msg : Odometry
             Odometry message
         """
-        self.current_position = (
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y,
-        )
+        new_x = msg.pose.pose.position.x
+        new_y = msg.pose.pose.position.y
+
+        if not self._is_valid_position(new_x, new_y):
+            self.node.get_logger().warn(
+                f"[GEOFENCE] Ignoring invalid odom values: ({new_x}, {new_y})",
+                throttle_duration_sec=1.0,
+            )
+            return
+
+        self.current_position = (new_x, new_y)
 
         orientation = msg.pose.pose.orientation
         self.current_yaw = quaternion_to_yaw(
@@ -110,11 +138,16 @@ class GeofenceManager:
         """
         self.enabled = True
         if self.center is None and self.odom_received:
-            self.center = self.current_position
-            self.node.get_logger().info(
-                f"[GEOFENCE] Center auto-set on enable: "
-                f"({self.center[0]:.2f}, {self.center[1]:.2f})"
-            )
+            if self._is_valid_position(*self.current_position):
+                self.center = self.current_position
+                self.node.get_logger().info(
+                    f"[GEOFENCE] Center auto-set on enable: "
+                    f"({self.center[0]:.2f}, {self.center[1]:.2f})"
+                )
+            else:
+                self.node.get_logger().warn(
+                    "[GEOFENCE] Cannot set center: current position is invalid"
+                )
         return self.center
 
     def disable(self):
@@ -133,6 +166,12 @@ class GeofenceManager:
         if not self.odom_received:
             self.node.get_logger().warn(
                 "Cannot reset geofence center: no odom received yet"
+            )
+            return False, None
+
+        if not self._is_valid_position(*self.current_position):
+            self.node.get_logger().warn(
+                "Cannot reset geofence center: current position is invalid (NaN/inf)"
             )
             return False, None
 
