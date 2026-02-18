@@ -57,12 +57,11 @@ class PersonFollowingSystem:
         history_file: str = None,
         auto_load_history: bool = True,
         auto_save_history: bool = True,
-        # Switch settings
-        switch_interval: float = 0.33,
-        switch_candidate_timeout: float = 3.0,
         # Approach and searching timeout settings
         approach_distance: float = 1.0,
         searching_timeout: float = 5.0,
+        # Background verification interval (greeting mode, seconds)
+        bg_verify_interval: float = 1.0,
         operation_mode: OperationMode = "greeting",
     ):
         """
@@ -123,28 +122,34 @@ class PersonFollowingSystem:
         self.auto_save_history = auto_save_history
 
         # Switch state machine
-        self.switch_state = SwitchState(
-            switch_interval=switch_interval,
-            candidate_timeout=switch_candidate_timeout,
-        )
+        self.switch_state = SwitchState()
 
         # Approach and searching timeout settings
         self.approach_distance = approach_distance
         self.searching_timeout = searching_timeout
+        self.bg_verify_interval = bg_verify_interval
 
         # Store operation mode
         self.operation_mode = operation_mode
 
-        # Background verification state
+        # Pending verification flag (for status reporting)
         self.pending_verification = False
-        self.verification_start_time = 0.0
-        self.verification_checks_done = 0
-        self.verification_max_checks = 3  # 3 successful checks to confirm
-        self.verification_interval = 0.33  # ~3 Hz
-        self.last_verification_time = 0.0
+
+        # Greeting mode: background verification against history
+        # (fast-track first, verify in background at 1 FPS)
+        self._bg_verify_pending = False
+        self._bg_verify_valid_count = (
+            0  # valid frames checked (need 2 for "new person")
+        )
+        self._bg_verify_attempts = 0  # total attempts (valid + invalid)
+        self._bg_verify_max_attempts = 5  # give up after this many attempts
+        self._bg_verify_last_time = 0.0  # rate limiting
+        self._bg_verify_in_history = False  # True if matched history
 
         # Track ID to exclude during switch (the person we're switching AWAY from)
         self._switch_excluded_track_id = None
+        # Whether the current target has been within approach_distance
+        self._target_approached = False
 
         self.target = TargetState()
         self.target.FRAME_MARGIN_LR = frame_margin_lr
@@ -164,16 +169,13 @@ class PersonFollowingSystem:
         logger.info(f"  - Operation mode: {operation_mode}")
         logger.info(f"  - Clothing threshold: {clothing_threshold}")
         logger.info(f"  - CLIP threshold: {clip_threshold}")
-        logger.info(
-            f"  - Switch interval: {switch_interval}s (~{1/switch_interval:.1f} Hz)"
-        )
-        logger.info(f"  - Switch timeout: {switch_candidate_timeout}s per candidate")
         logger.info(f"  - Max history size: {max_history_size}")
         logger.info(f"  - History file: {self.history_file}")
         logger.info(f"  - Approach distance: {approach_distance}m")
         logger.info(f"  - Searching timeout: {searching_timeout}s")
+        logger.info(f"  - BG verify interval: {bg_verify_interval}s")
         logger.info(
-            f"  - Background verification: max {self.verification_max_checks} checks @ {self.verification_interval}s"
+            "  - History check: greeting=background-verify, following=pre-enroll"
         )
 
         # Auto load history on startup
@@ -872,10 +874,28 @@ class PersonFollowingSystem:
 
         saved = False
         if self.target.status != "INACTIVE":
-            saved = self._save_current_target_to_history()
-            if self.auto_save_history:
-                self.save_history()
-            logger.info(f"Greeting acknowledged - saved={saved}, going inactive")
+            # Verification must be complete before greeting_ack is valid
+            if self._bg_verify_pending:
+                logger.warning(
+                    "Greeting acknowledged but verification still pending "
+                    f"({self._bg_verify_valid_count}/2 valid frames)"
+                )
+                return {
+                    "saved": False,
+                    "history_size": len(self.enrolled_history),
+                    "status": self.target.status,
+                    "error": "verification_pending",
+                    "verify_valid_count": self._bg_verify_valid_count,
+                }
+            if self._target_approached:
+                saved = self._save_current_target_to_history()
+                if self.auto_save_history:
+                    self.save_history()
+                logger.info(f"Greeting acknowledged - approached=True, saved={saved}")
+            else:
+                logger.info(
+                    "Greeting acknowledged - not approached, NOT saving to history"
+                )
 
         self.clear_target()
         return {
@@ -916,6 +936,18 @@ class PersonFollowingSystem:
             return {"started": False, "reason": "not_available_in_following_mode"}
 
         timestamp = time.time()
+
+        # If the current person was approached, save them to history first
+        # so they won't be re-greeted after switch
+        if self._target_approached:
+            saved = self._save_current_target_to_history()
+            if saved:
+                logger.info(
+                    f"[SWITCH] Auto-saved approached person to history "
+                    f"(track_id={self.target.track_id})"
+                )
+                if self.auto_save_history:
+                    self.save_history()
 
         # Remember who we're switching AWAY from so we don't re-accept them
         self._switch_excluded_track_id = self.target.track_id
@@ -1020,6 +1052,9 @@ class PersonFollowingSystem:
             "num_tracks": len(tracks),
             "all_tracks": self.all_tracks,
             "pending_verification": self.pending_verification,
+            "bg_verify_pending": self._bg_verify_pending,
+            "bg_verify_valid_count": self._bg_verify_valid_count,
+            "bg_verify_attempts": self._bg_verify_attempts,
         }
 
         if self.operation_mode == "greeting":
@@ -1064,6 +1099,26 @@ class PersonFollowingSystem:
             result["lidar_source"] = lt_status.get("lidar_source", "none")
             result["lidar_cluster_xy"] = lt_status.get("lidar_cluster_xy")
             result["lidar_kf_position_xy"] = lt_status.get("lidar_kf_position_xy")
+
+            # ALWAYS set lidar_position from get_position_for_publish()
+            # when tracker is active. This is the CANONICAL source used by
+            # the main loop for ROS publishing. State processors may also set
+            # it, but this guarantees it's always present when KF has data.
+            if lt_status.get("lidar_active", False):
+                pos = self.lidar_tracker.get_position_for_publish()
+                if pos is not None:
+                    result["lidar_position"] = pos
+                    # If no tracking_source was set by state processor,
+                    # determine from current state
+                    if result.get("tracking_source") in (None, "none", "camera"):
+                        if self.target.status == "SEARCHING":
+                            result["tracking_source"] = "lidar_searching"
+                        elif not result.get("target_found", False):
+                            result["tracking_source"] = "lidar"
+
+        # Refresh status — mark_lost()/clear_target() may have changed it
+        # during state processing above
+        result["status"] = self.target.status
 
         return result
 
@@ -1121,6 +1176,7 @@ class PersonFollowingSystem:
         if candidate is None:
             ss.stop()
             self.target.status = "INACTIVE"
+            self._switch_excluded_track_id = None
             logger.warning("[SWITCH] All candidates exhausted")
             return {
                 "switch_active": False,
@@ -1139,6 +1195,7 @@ class PersonFollowingSystem:
             if not has_more:
                 ss.stop()
                 self.target.status = "INACTIVE"
+                self._switch_excluded_track_id = None
                 return {
                     "switch_active": False,
                     "success": False,
@@ -1190,31 +1247,81 @@ class PersonFollowingSystem:
             self.pending_verification = False  # Nothing to verify against
             return result
 
-        # HISTORY EXISTS: Accept immediately, verify in background
-        logger.info(
-            f"[SWITCH-FAST] History has {len(self.enrolled_history)} entries - "
-            f"accepting candidate track_id={candidate['track_id']} immediately, "
-            f"will verify in background"
-        )
+        # HISTORY EXISTS: Check candidate against history BEFORE accepting.
+        # This prevents briefly tracking a person we just saved to history
+        # (e.g., after approach → switch).
         x1, y1, x2, y2 = candidate["bbox"]
         crop = color_frame[y1:y2, x1:x2]
         mask, clothing_feat, clip_emb, mask_coverage, _ = self._extract_features(crop)
 
-        result = self._accept_switch_candidate(
+        # All signals must be valid to compare against history.
+        # Without valid features we can't tell if this person is in history,
+        # so skip rather than accepting blindly.
+        features_valid = (
+            clothing_feat is not None
+            and (not self.use_clip or clip_emb is not None)
+            and mask_coverage >= self.min_mask_coverage
+        )
+
+        if not features_valid:
+            logger.info(
+                f"[SWITCH] Candidate track_id={candidate['track_id']} "
+                f"features incomplete (clothing={'OK' if clothing_feat is not None else 'NONE'} "
+                f"clip={'OK' if clip_emb is not None else 'NONE'} mask={mask_coverage:.1f}%) "
+                f"→ skipping (can't verify against history)"
+            )
+            has_more = ss.move_to_next_candidate(timestamp, "no_features")
+            if not has_more:
+                ss.stop()
+                self.target.status = "INACTIVE"
+                self._switch_excluded_track_id = None
+                return {
+                    "switch_active": False,
+                    "success": False,
+                    "reason": "all_candidates_no_features",
+                    "switch_summary": ss.get_summary(),
+                }
+            return {"switch_active": True, "skipped": True, "reason": "no_features"}
+
+        is_match, c_sim, clip_sim = self._is_in_history(
+            clothing_feat, clip_emb, candidate["distance"]
+        )
+        if is_match:
+            logger.info(
+                f"[SWITCH] Candidate track_id={candidate['track_id']} "
+                f"MATCHES history (C={c_sim:.3f} CLIP={clip_sim:.3f}) → skipping"
+            )
+            has_more = ss.move_to_next_candidate(timestamp, "in_history")
+            if not has_more:
+                ss.stop()
+                self.target.status = "INACTIVE"
+                self._switch_excluded_track_id = None
+                return {
+                    "switch_active": False,
+                    "success": False,
+                    "reason": "all_candidates_in_history",
+                    "switch_summary": ss.get_summary(),
+                }
+            return {
+                "switch_active": True,
+                "skipped": True,
+                "reason": "in_history",
+                "clothing_sim": c_sim,
+                "clip_sim": clip_sim,
+            }
+
+        logger.info(
+            f"[SWITCH] History has {len(self.enrolled_history)} entries - "
+            f"candidate track_id={candidate['track_id']} NOT in history, accepting"
+        )
+
+        return self._accept_switch_candidate(
             candidate,
             timestamp,
             clothing_feat=clothing_feat,
             clip_emb=clip_emb,
             mask_coverage=mask_coverage,
         )
-
-        # Start background verification
-        self.pending_verification = True
-        self.verification_start_time = timestamp
-        self.verification_checks_done = 0
-        self.last_verification_time = 0.0
-
-        return result
 
     def _accept_switch_candidate(
         self, candidate, timestamp, clothing_feat=None, clip_emb=None, mask_coverage=0.0
@@ -1381,6 +1488,108 @@ class PersonFollowingSystem:
             self.target.frames_tracked += 1
             is_within_margin, _ = self.target.is_within_frame_margin(bbox, W, H)
 
+            # ── Background verification (greeting mode only) ──
+            # Fast-tracked person: check against history at 1 FPS in background.
+            # 1 valid frame match → INACTIVE (skip person)
+            # 2 valid frames no match → confirmed new person
+            bg_verify_result = None
+            if (
+                self.operation_mode == "greeting"
+                and self._bg_verify_pending
+                and timestamp - self._bg_verify_last_time >= self.bg_verify_interval
+            ):
+                self._bg_verify_last_time = timestamp
+                self._bg_verify_attempts += 1
+                crop = color_frame[y1:y2, x1:x2]
+                v_mask, v_clothing, v_clip, v_coverage, v_err = self._extract_features(
+                    crop
+                )
+                # ALL three signals must be valid for a comparison
+                if (
+                    v_clothing is not None
+                    and v_clip is not None
+                    and v_coverage >= self.min_mask_coverage
+                ):
+                    is_match, c_sim, clip_sim = self._is_in_history(
+                        v_clothing, v_clip, current_distance
+                    )
+                    if is_match:
+                        # Person is in history → skip immediately
+                        logger.info(
+                            f"[BG-VERIFY] MATCH to history! "
+                            f"C={c_sim:.3f} CLIP={clip_sim:.3f} "
+                            f"→ clearing target, going INACTIVE"
+                        )
+                        self._bg_verify_in_history = True
+                        self._bg_verify_pending = False
+                        self.pending_verification = False
+                        self.clear_target()
+                        bg_verify_result = "in_history"
+                    else:
+                        self._bg_verify_valid_count += 1
+                        logger.info(
+                            f"[BG-VERIFY] No match ({self._bg_verify_valid_count}/2): "
+                            f"C={c_sim:.3f} CLIP={clip_sim:.3f}"
+                        )
+                        if self._bg_verify_valid_count >= 2:
+                            # Confirmed new person
+                            self._bg_verify_pending = False
+                            self.pending_verification = False
+                            logger.info(
+                                "[BG-VERIFY] Confirmed NEW person "
+                                "(2 valid frames, no history match)"
+                            )
+                            bg_verify_result = "confirmed_new"
+                else:
+                    logger.debug(
+                        f"[BG-VERIFY] Skipping frame (signals not valid): "
+                        f"clothing={'OK' if v_clothing is not None else 'NONE'} "
+                        f"clip={'OK' if v_clip is not None else 'NONE'} "
+                        f"mask={v_coverage:.1f}%"
+                    )
+                    # Timeout: if too many attempts without enough valid frames,
+                    # assume new person (can't determine either way)
+                    if self._bg_verify_attempts >= self._bg_verify_max_attempts:
+                        self._bg_verify_pending = False
+                        self.pending_verification = False
+                        logger.info(
+                            f"[BG-VERIFY] Timeout after {self._bg_verify_attempts} attempts "
+                            f"({self._bg_verify_valid_count} valid) — assuming NEW person"
+                        )
+                        bg_verify_result = "timeout_assume_new"
+
+            # If verification found person in history, return immediately
+            if bg_verify_result == "in_history":
+                return {
+                    "target_found": False,
+                    "tracking_source": "none",
+                    "bg_verify_result": "in_history",
+                    "status": "INACTIVE",
+                }
+
+            # Track approach state for greeting mode
+            # Only mark as approached AFTER verification is complete
+            if (
+                self.operation_mode == "greeting"
+                and not self._bg_verify_pending
+                and current_distance > 0.1
+                and current_distance <= self.approach_distance
+            ):
+                if not self._target_approached:
+                    logger.info(
+                        f"[APPROACH] Target within approach distance: "
+                        f"{current_distance:.2f}m <= {self.approach_distance}m "
+                        f"(verification complete)"
+                    )
+                self._target_approached = True
+            elif (
+                self.operation_mode != "greeting"
+                and current_distance > 0.1
+                and current_distance <= self.approach_distance
+            ):
+                # Following mode: no verification gating
+                self._target_approached = True
+
             # Update LiDAR tracker (sync with bbox)
             lidar_result = None
             if has_lidar:
@@ -1411,14 +1620,6 @@ class PersonFollowingSystem:
                 result["lidar_jump"] = lidar_result.jump_detected
                 result["lidar_bbox_overlap"] = lidar_result.bbox_overlap
 
-            # Background verification
-            if self.pending_verification:
-                result.update(
-                    self._run_background_verification(
-                        color_frame, bbox, current_distance, timestamp
-                    )
-                )
-
             return result
 
         # ── Camera lost the bbox ──
@@ -1446,6 +1647,9 @@ class PersonFollowingSystem:
 
             # Transition to SEARCHING — clothing/CLIP will try to re-identify
             self.target.mark_lost(timestamp)
+            self.last_search_time = (
+                0.0  # Force immediate re-id on first SEARCHING frame
+            )
             logger.info(
                 "[LIDAR-FALLBACK] Camera lost bbox, LiDAR active → SEARCHING "
                 "(LiDAR provides position while searching)"
@@ -1474,78 +1678,9 @@ class PersonFollowingSystem:
 
         # No LiDAR tracker or not enrolled → original behavior
         self.target.mark_lost(timestamp)
+        self.last_search_time = 0.0  # Force immediate re-id on first SEARCHING frame
         logger.info(f"Target lost (track_id={self.target.track_id})")
         return {"target_found": False, "tracking_source": "none"}
-
-    def _run_background_verification(
-        self, color_frame, bbox, distance, timestamp
-    ) -> dict:
-        """
-        Run one step of background history verification.
-
-        Returns dict with verification status fields to merge into result.
-        """
-        # Check if all verification checks passed
-        if self.verification_checks_done >= self.verification_max_checks:
-            self.pending_verification = False
-            logger.info(
-                f"[VERIFY] PASSED all {self.verification_max_checks} checks - "
-                f"confirmed NOT in history, tracking continues"
-            )
-            return {"verification_status": "passed"}
-
-        # Throttle checks
-        if (timestamp - self.last_verification_time) < self.verification_interval:
-            return {"verification_status": "waiting"}
-
-        self.last_verification_time = timestamp
-
-        x1, y1, x2, y2 = bbox
-        crop = color_frame[y1:y2, x1:x2]
-
-        mask, clothing_feat, clip_emb, mask_coverage, err = self._extract_features(crop)
-
-        if clothing_feat is None or mask_coverage < self.min_mask_coverage - 10:
-            # Bad features this frame, skip but don't count as a check
-            logger.debug("[VERIFY] Feature extraction failed this frame, skipping")
-            return {"verification_status": "skip_bad_features"}
-
-        is_match, c_sim, clip_sim = self._is_in_history(
-            clothing_feat, clip_emb, distance
-        )
-        self.verification_checks_done += 1
-
-        if is_match:
-            # FOUND IN HISTORY! This person was already greeted.
-            logger.warning(
-                f"[VERIFY] MATCH FOUND in history after fast-accept! "
-                f"C={c_sim:.3f} CLIP={clip_sim:.3f} "
-                f"(check {self.verification_checks_done}/{self.verification_max_checks}) "
-                f"- REJECTING target, will re-switch"
-            )
-            self.pending_verification = False
-
-            # Clear target - don't save to history (already there)
-            self.clear_target()
-
-            return {
-                "verification_status": "rejected",
-                "verification_rejected": True,
-                "target_found": False,
-                "status": "INACTIVE",
-                "verification_clothing_sim": c_sim,
-                "verification_clip_sim": clip_sim,
-            }
-        else:
-            logger.info(
-                f"[VERIFY] Check {self.verification_checks_done}/{self.verification_max_checks}: "
-                f"not in history (C={c_sim:.3f} CLIP={clip_sim:.3f})"
-            )
-            return {
-                "verification_status": "checking",
-                "verification_clothing_sim": c_sim,
-                "verification_clip_sim": clip_sim,
-            }
 
     # Searching
 
@@ -1706,7 +1841,27 @@ class PersonFollowingSystem:
         results = []
         candidates_info_cache = []
 
+        # Limit feature extraction per search cycle to avoid frame stalls.
+        # Closest candidates are most likely the target.
+        candidates.sort(key=lambda p: p["distance"])
+        max_extract = 2
+        extract_count = 0
+
         for person in candidates:
+            if extract_count >= max_extract:
+                # Still record remaining candidates for visualization
+                cand_info = {
+                    "track_id": person["track_id"],
+                    "bbox": person["bbox"],
+                    "clothing_sim": 0,
+                    "clip_sim": 0,
+                    "mask_coverage": 0,
+                    "bucket": 0,
+                }
+                self.all_candidates_info.append(cand_info)
+                candidates_info_cache.append(cand_info)
+                continue
+
             x1, y1, x2, y2 = person["bbox"]
             crop = color_frame[y1:y2, x1:x2]
             query_distance = person["distance"]
@@ -1714,11 +1869,19 @@ class PersonFollowingSystem:
             mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
                 self._extract_features(crop)
             )
+            extract_count += 1
             if error_msg and "segmentation" in error_msg:
                 continue
             if clothing_feat is None:
                 continue
             if mask_coverage < self.min_mask_coverage - 10:
+                continue
+            # All three signals must be valid for re-identification
+            if self.use_clip and clip_emb is None:
+                logger.debug(
+                    f"[RE-ID] Skipping track {person['track_id']}: "
+                    f"CLIP extraction failed (clothing OK, mask={mask_coverage:.1f}%)"
+                )
                 continue
 
             ref_features = self.target.get_bucket_features_both_directions(
@@ -1732,6 +1895,9 @@ class PersonFollowingSystem:
             clip_sims = []
 
             for ref in ref_features:
+                # Skip refs without CLIP when CLIP is required
+                if self.use_clip and ref.get("clip") is None:
+                    continue
                 c_sim = self.clothing_matcher.compute_clothing_similarity(
                     clothing_feat, ref["clothing"]
                 )
@@ -1745,6 +1911,26 @@ class PersonFollowingSystem:
             best_clothing_sim = max(clothing_sims) if clothing_sims else 0
             best_clip_sim = max(clip_sims) if clip_sims else 0
             clip_available = len(clip_sims) > 0
+
+            # If no valid comparisons possible (e.g. all refs lack CLIP), skip
+            if not clothing_sims or (self.use_clip and not clip_available):
+                logger.debug(
+                    f"[RE-ID] Skipping track {person['track_id']}: "
+                    f"no valid refs for comparison (sims={len(clothing_sims)}, "
+                    f"clip_avail={clip_available})"
+                )
+                cand_info = {
+                    "track_id": person["track_id"],
+                    "bbox": person["bbox"],
+                    "clothing_sim": best_clothing_sim,
+                    "clip_sim": best_clip_sim,
+                    "mask_coverage": mask_coverage,
+                    "bucket": closest_bucket,
+                }
+                self.all_candidates_info.append(cand_info)
+                candidates_info_cache.append(cand_info)
+                continue
+
             passed_clothing = best_clothing_sim >= self.clothing_threshold
             passed_clip = (
                 (best_clip_sim >= self.clip_threshold if clip_available else False)
@@ -1900,24 +2086,53 @@ class PersonFollowingSystem:
             return False
 
         persons.sort(key=lambda p: p["distance"])
-        target = persons[0]
-        x1, y1, x2, y2 = target["bbox"]
-        crop = color_frame[y1:y2, x1:x2]
 
-        mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
-            self._extract_features(crop)
-        )
-        if error_msg:
-            logger.warning(f"Feature extraction failed: {error_msg}")
-        if clothing_feat is None:
-            logger.warning("Failed to extract clothing features")
+        # In following mode, skip persons already in history.
+        # In greeting mode, fast-track (enroll immediately, verify in background).
+        target = None
+        for person in persons:
+            x1, y1, x2, y2 = person["bbox"]
+            crop = color_frame[y1:y2, x1:x2]
+
+            mask, clothing_feat, clip_emb, mask_coverage, error_msg = (
+                self._extract_features(crop)
+            )
+            if error_msg:
+                logger.debug(f"Feature extraction failed: {error_msg}")
+                continue
+            if clothing_feat is None:
+                continue
+            if mask_coverage < self.min_mask_coverage:
+                continue
+            if self.use_clip and clip_emb is None:
+                continue
+
+            # Check history ONLY in following mode (following mode: match first)
+            # Greeting mode: fast-track first, verify in background
+            if self.operation_mode == "following" and self.enrolled_history:
+                is_match, c_sim, clip_sim = self._is_in_history(
+                    clothing_feat, clip_emb, person["distance"]
+                )
+                if is_match:
+                    logger.info(
+                        f"[ENROLL] Skipping track_id={person['track_id']} - "
+                        f"already in history (C={c_sim:.3f} CLIP={clip_sim:.3f})"
+                    )
+                    continue
+
+            target = person
+            target["_clothing_feat"] = clothing_feat
+            target["_clip_emb"] = clip_emb
+            target["_mask_coverage"] = mask_coverage
+            break
+
+        if target is None:
+            logger.warning("No valid person to enroll (all in history or bad features)")
             return False
-        if mask_coverage < self.min_mask_coverage:
-            logger.warning(f"Mask coverage too low: {mask_coverage:.1f}%")
-            return False
-        if self.use_clip and clip_emb is None:
-            logger.warning("CLIP embedding required but failed")
-            return False
+
+        clothing_feat = target["_clothing_feat"]
+        clip_emb = target["_clip_emb"]
+        mask_coverage = target["_mask_coverage"]
 
         self.target.initialize(target["track_id"], target["distance"], timestamp)
         bucket = self.target._get_bucket(target["distance"])
@@ -1938,6 +2153,26 @@ class PersonFollowingSystem:
                     logger.info(f"  LiDAR tracker enrolled: {lidar_ok}")
                 except Exception as e:
                     logger.error(f"  LiDAR tracker enroll FAILED: {e}")
+
+            # Greeting mode: start background verification against history
+            if self.operation_mode == "greeting" and self.enrolled_history:
+                self._bg_verify_pending = True
+                self._bg_verify_valid_count = 0
+                self._bg_verify_attempts = 0
+                self._bg_verify_last_time = 0.0
+                self._bg_verify_in_history = False
+                self.pending_verification = True
+                logger.info(
+                    f"[BG-VERIFY] Started background verification "
+                    f"(history={len(self.enrolled_history)} entries)"
+                )
+            elif self.operation_mode == "greeting":
+                # No history → immediately confirmed as new person
+                self._bg_verify_pending = False
+                self._bg_verify_in_history = False
+                self.pending_verification = False
+                logger.info("[BG-VERIFY] No history — person confirmed new immediately")
+
             return True
         return False
 
@@ -1946,9 +2181,19 @@ class PersonFollowingSystem:
         self.target = TargetState()
         self.target.FRAME_MARGIN_LR = 20
         self.target.MIN_MASK_COVERAGE = self.min_mask_coverage
+        self.target.MIN_MASK_COVERAGE_FOR_MATCH = self.min_mask_coverage - 5
         self.target.BUCKET_SPACING = self.bucket_spacing
         self.target.operation_mode = self.operation_mode
         self.pending_verification = False
+        self._target_approached = False
+        # NOTE: Do NOT reset _switch_excluded_track_id here!
+        # request_switch_target() sets it BEFORE calling clear_target().
+        # Reset background verification
+        self._bg_verify_pending = False
+        self._bg_verify_valid_count = 0
+        self._bg_verify_attempts = 0
+        self._bg_verify_last_time = 0.0
+        self._bg_verify_in_history = False
         if self.lidar_tracker is not None:
             self.lidar_tracker.clear()
         logger.info("Target cleared")
@@ -1975,6 +2220,11 @@ class PersonFollowingSystem:
         if self.operation_mode == "greeting":
             status["history_size"] = len(self.enrolled_history)
             status["max_history_size"] = self.max_history_size
+            status["target_approached"] = self._target_approached
+            status["bg_verify_pending"] = self._bg_verify_pending
+            status["bg_verify_valid_count"] = self._bg_verify_valid_count
+            status["bg_verify_attempts"] = self._bg_verify_attempts
+            status["bg_verify_interval"] = self.bg_verify_interval
             status["switch_active"] = self.switch_state.active
             status["switch_summary"] = (
                 self.switch_state.get_summary() if self.switch_state.active else None

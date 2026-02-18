@@ -320,20 +320,6 @@ def parse_args():
         help="Don't auto-save history after switch",
     )
 
-    # Switch settings
-    p.add_argument(
-        "--switch-interval",
-        type=float,
-        default=0.3,
-        help="Interval between feature checks during switch (default: 0.33s = ~3Hz)",
-    )
-    p.add_argument(
-        "--switch-timeout",
-        type=float,
-        default=1.0,
-        help="Max time to check each candidate during switch (default: 3.0s)",
-    )
-
     # Approach and searching timeout settings
     p.add_argument(
         "--approach-distance",
@@ -697,6 +683,10 @@ class Go2ROSCameraLidar:
         self._lock = threading.Lock()
         self._color_frame: Optional[np.ndarray] = None
         self._latest_scan: Optional[LaserScan] = None
+        self._frame_seq: int = 0
+        self._scan_seq: int = 0
+        self._cached_aux: Optional[dict] = None
+        self._cached_scan_seq: int = -1
 
         fx, fy, cx, cy, w, h = load_intrinsics_yaml(intrinsics_yaml)
         self._yaml_width = w
@@ -777,7 +767,8 @@ class Go2ROSCameraLidar:
                 self.width = W
                 self.height = H
             with self._lock:
-                self._color_frame = frame.copy()
+                self._color_frame = frame  # no copy — callback owns this frame
+                self._frame_seq += 1
         except Exception as e:
             logger.error(f"Go2 image callback error: {e}")
 
@@ -794,6 +785,7 @@ class Go2ROSCameraLidar:
             return
         with self._lock:
             self._latest_scan = msg
+            self._scan_seq += 1
 
     def _project_scan(
         self, scan: LaserScan, frame_shape: Tuple[int, int]
@@ -812,7 +804,7 @@ class Go2ROSCameraLidar:
         -------
         dict or None
             Projection data with 'lidar_uv', 'lidar_ranges', 'lidar_scan_idx',
-            or None if projection fails.
+            'uv', 'idx', 'r', 'xy', 'scan_xy', or None if projection fails.
         """
         H, W = frame_shape
         ranges_full = np.array(scan.ranges, dtype=np.float64)
@@ -863,6 +855,8 @@ class Go2ROSCameraLidar:
         idx_final = idx_ok[in_img]
         r_final = r_ok[in_img]
         xy_final = np.column_stack([x_ok[in_img], y_ok[in_img]])
+        # scan_xy = ALL valid XY points (not just in-image), for KF tracker
+        all_xy = np.column_stack([x_lidar, y_lidar])
         return {
             # Original keys (used by draw_visualization, _get_distance_from_lidar)
             "lidar_uv": uv_final,
@@ -873,6 +867,8 @@ class Go2ROSCameraLidar:
             "idx": idx_final,
             "r": r_final,
             "xy": xy_final,
+            # All LiDAR XY for KF tracker (not just in-image)
+            "scan_xy": all_xy,
         }
 
     def get_frames(
@@ -895,27 +891,16 @@ class Go2ROSCameraLidar:
                 return None, None, None
             frame = self._color_frame.copy()
             scan = self._latest_scan
-        aux = None
+            scan_seq = self._scan_seq
+
+        # Cache scan projection — only recompute when scan changes
         if scan is not None:
-            aux = self._project_scan(scan, frame.shape[:2])
-            # Add full LiDAR XY points for KF tracker
-            if aux is not None:
-                ranges_full = np.array(scan.ranges, dtype=np.float64)
-                n = len(ranges_full)
-                if n > 0:
-                    angles = (
-                        scan.angle_min
-                        + np.arange(n, dtype=np.float64) * scan.angle_increment
-                    )
-                    valid = (
-                        np.isfinite(ranges_full)
-                        & (ranges_full > float(scan.range_min))
-                        & (ranges_full < float(scan.range_max))
-                    )
-                    if np.any(valid):
-                        r = ranges_full[valid]
-                        a = angles[valid]
-                        aux["scan_xy"] = np.column_stack([r * np.cos(a), r * np.sin(a)])
+            if scan_seq != self._cached_scan_seq:
+                self._cached_aux = self._project_scan(scan, frame.shape[:2])
+                self._cached_scan_seq = scan_seq
+            aux = self._cached_aux
+        else:
+            aux = None
         return frame, None, aux
 
     def stop(self):
@@ -977,9 +962,15 @@ class TrackedPersonPublisher(Node):
         approached: bool = False,
         operation_mode: str = "greeting",
         num_persons: int = 0,
+        tracking_source: str = "none",
     ):
         """
         Publish tracked person status to ROS topics.
+
+        ALWAYS publishes to both /tracked_person/status (JSON) and
+        /person_following_robot/tracked_person/position (PoseStamped).
+        The robot controller can use 'mode' and 'is_tracked' fields
+        from the status topic to decide how to use the position data.
 
         Parameters
         ----------
@@ -999,6 +990,8 @@ class TrackedPersonPublisher(Node):
             Operation mode ('greeting' or 'following'), by default 'greeting'.
         num_persons : int, optional
             Number of persons currently detected, by default 0.
+        tracking_source : str, optional
+            Source of position data ('camera', 'lidar', 'lidar_searching', 'none').
         """
         msg = String()
         msg.data = json.dumps(
@@ -1011,20 +1004,22 @@ class TrackedPersonPublisher(Node):
                 "approached": approached,
                 "operation_mode": operation_mode,
                 "num_persons": num_persons,
+                "tracking_source": tracking_source,
             }
         )
         self.publisher.publish(msg)
 
-        if is_tracked:
-            now = self.get_clock().now()
-            pose = PoseStamped()
-            pose.header.stamp = now.to_msg()
-            pose.header.frame_id = "camera_color_optical_frame"
-            pose.pose.position.x = x
-            pose.pose.position.y = 0.0
-            pose.pose.position.z = z
-            pose.pose.orientation.w = 1.0
-            self.pose_publisher.publish(pose)
+        # ALWAYS publish PoseStamped so the robot controller gets continuous
+        # position updates in all modes (TRACKING, SEARCHING with LiDAR, etc.)
+        now = self.get_clock().now()
+        pose = PoseStamped()
+        pose.header.stamp = now.to_msg()
+        pose.header.frame_id = "camera_color_optical_frame"
+        pose.pose.position.x = x
+        pose.pose.position.y = 0.0
+        pose.pose.position.z = z
+        pose.pose.orientation.w = 1.0
+        self.pose_publisher.publish(pose)
 
         self.publish_count += 1
 
@@ -1275,10 +1270,9 @@ def draw_visualization(
             x1, y1, x2, y2 = current_cand["bbox"]
             cv2.rectangle(display, (x1, y1), (x2, y2), (255, 255, 0), 3)
 
-            time_left = ss.get_time_remaining(time.time())
             label = (
-                f"Checking... C={ss.best_clothing_sim:.2f} "
-                f"checks={ss.valid_check_count} match={ss.match_votes} ({time_left:.1f}s)"
+                f"Checking #{ss.current_candidate_idx + 1} "
+                f"(d={current_cand.get('distance', 0):.1f}m)"
             )
             cv2.putText(
                 display,
@@ -1361,6 +1355,10 @@ def draw_visualization(
                 # In SEARCHING mode, show the lost target's ID in orange (not green)
                 color = (0, 165, 255)  # Orange - searching for this ID
                 thickness = 2
+            elif status == "SEARCHING":
+                # All visible tracks are potential re-id candidates during search
+                color = (0, 200, 255)  # Light orange - candidate
+                thickness = 1
             else:
                 color = (128, 128, 128)
                 thickness = 1
@@ -1477,17 +1475,71 @@ def draw_visualization(
         2,
     )
 
+    # Background verification indicator (greeting mode only)
+    if operation_mode == "greeting" and status == "TRACKING_ACTIVE":
+        bg_pending = result.get("bg_verify_pending", False)
+        bg_count = result.get("bg_verify_valid_count", 0)
+        bg_attempts = result.get("bg_verify_attempts", 0)
+        bg_result = result.get("bg_verify_result")
+
+        if bg_result == "in_history":
+            # Flash red — matched history, about to go INACTIVE
+            verify_text = "VERIFY: IN HISTORY -> SKIP"
+            verify_color = (0, 0, 255)  # red
+        elif bg_result == "timeout_assume_new":
+            verify_text = "VERIFIED (timeout)"
+            verify_color = (0, 200, 200)  # dark yellow
+        elif bg_pending:
+            verify_text = f"VERIFYING ({bg_count}/2, try {bg_attempts}/5)"
+            verify_color = (0, 255, 255)  # yellow
+        else:
+            verify_text = "VERIFIED"
+            verify_color = (0, 255, 0)  # green
+
+        y_pos += line_height
+        cv2.putText(
+            display,
+            verify_text,
+            (10, y_pos),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            verify_color,
+            2,
+        )
+
     y_pos += line_height
-    tracked_color = (0, 255, 0) if is_tracked else (0, 0, 255)
+    tracking_src = result.get("tracking_source", "")
+    if is_tracked and tracking_src in ("lidar_searching", "lidar", "lidar_predict"):
+        tracked_color = (255, 0, 255)  # magenta for LiDAR
+        tracked_text = f"Tracked: LiDAR (d={distance:.2f}m)"
+    elif is_tracked:
+        tracked_color = (0, 255, 0)
+        tracked_text = f"Tracked: YES (d={distance:.2f}m)"
+    else:
+        tracked_color = (0, 0, 255)
+        tracked_text = "Tracked: NO"
     cv2.putText(
         display,
-        f"Tracked: {'YES' if is_tracked else 'NO'}",
+        tracked_text,
         (10, y_pos),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.55,
         tracked_color,
         2,
     )
+
+    # LiDAR out-of-FOV warning
+    if result.get("lidar_out_of_fov"):
+        y_pos += line_height
+        cv2.putText(
+            display,
+            "LiDAR: OUT OF FOV",
+            (10, y_pos),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.55,
+            (0, 128, 255),  # orange
+            2,
+        )
 
     y_pos += line_height
     cv2.putText(
@@ -1628,17 +1680,31 @@ def draw_visualization(
             2,
         )
 
-        # Show LiDAR-assisted searching indicator
+        # Show LiDAR-assisted searching indicator with position
         if lidar_tracking:
-            cv2.putText(
-                display,
-                "LiDAR: tracking position",
-                (W // 2 - 80, H // 2 + 25),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (255, 0, 255),
-                2,
-            )
+            lidar_pos = result.get("lidar_position")
+            if lidar_pos:
+                ld = lidar_pos.get("z", 0)
+                lx = lidar_pos.get("x", 0)
+                cv2.putText(
+                    display,
+                    f"LiDAR tracking: d={ld:.2f}m x={lx:.2f}m (publishing)",
+                    (W // 2 - 130, H // 2 + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (255, 0, 255),
+                    2,
+                )
+            else:
+                cv2.putText(
+                    display,
+                    "LiDAR: lost cluster",
+                    (W // 2 - 60, H // 2 + 25),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 165, 255),
+                    1,
+                )
 
     # Show approached banner (greeting mode only)
     if approached and operation_mode == "greeting":
@@ -1772,9 +1838,6 @@ def main() -> None:
         history_file=args.history_file,
         auto_load_history=not args.no_auto_load_history,
         auto_save_history=not args.no_auto_save_history,
-        # Switch options
-        switch_interval=args.switch_interval,
-        switch_candidate_timeout=args.switch_timeout,
         # Approach and searching timeout options
         approach_distance=args.approach_distance,
         searching_timeout=args.searching_timeout,
@@ -1824,9 +1887,6 @@ def main() -> None:
     logger.info(f"Publish rate: {args.publish_hz} Hz")
     if operation_mode == "greeting":
         logger.info(f"Max history size: {args.max_history_size}")
-        logger.info(
-            f"Switch interval: {args.switch_interval}s, timeout: {args.switch_timeout}s"
-        )
         logger.info(f"Approach distance: {args.approach_distance}m")
         logger.info(f"Searching timeout: {args.searching_timeout}s")
         logger.info(
@@ -2128,6 +2188,10 @@ def main() -> None:
 
     current_mode = "INACTIVE"
     mode_start_time = time.time()
+    last_process_time = 0.0
+    # Process at slightly lower rate than publish to leave headroom for display
+    process_period = publish_period
+    last_result = None
 
     try:
         while rclpy.ok() and not stop_event.is_set():
@@ -2162,38 +2226,51 @@ def main() -> None:
                         "ts": time.time(),
                     }
 
-            result = system.process_frame(color_frame, depth_frame, aux)
+            # Run heavy processing (YOLO+BoxMOT+state) at target rate,
+            # not every loop iteration, to keep display responsive.
+            current_time = time.time()
+            should_process = (current_time - last_process_time) >= process_period
 
-            # Inject LiDAR KF visualization data (project XY → image UV)
-            if hasattr(camera, "R_CL") and result.get("lidar_active", False):
-                H_img, W_img = color_frame.shape[:2]
-                cluster_xy = result.get("lidar_cluster_xy", None)
-                if cluster_xy is not None:
-                    result["lidar_tracked_uv"] = project_lidar_xy_to_uv(
-                        cluster_xy,
-                        camera.R_CL,
-                        camera.t_CL,
-                        camera.fx,
-                        camera.fy,
-                        camera.cx,
-                        camera.cy,
-                        W_img,
-                        H_img,
-                    )
-                kf_pos = result.get("lidar_kf_position_xy", None)
-                if kf_pos is not None:
-                    kf_arr = np.array([[kf_pos[0], kf_pos[1]]])
-                    result["lidar_kf_uv"] = project_lidar_xy_to_uv(
-                        kf_arr,
-                        camera.R_CL,
-                        camera.t_CL,
-                        camera.fx,
-                        camera.fy,
-                        camera.cx,
-                        camera.cy,
-                        W_img,
-                        H_img,
-                    )
+            if should_process:
+                last_process_time = current_time
+                result = system.process_frame(color_frame, depth_frame, aux)
+                last_result = result
+
+                # Inject LiDAR KF visualization data (project XY → image UV)
+                if hasattr(camera, "R_CL") and result.get("lidar_active", False):
+                    H_img, W_img = color_frame.shape[:2]
+                    cluster_xy = result.get("lidar_cluster_xy", None)
+                    if cluster_xy is not None:
+                        result["lidar_tracked_uv"] = project_lidar_xy_to_uv(
+                            cluster_xy,
+                            camera.R_CL,
+                            camera.t_CL,
+                            camera.fx,
+                            camera.fy,
+                            camera.cx,
+                            camera.cy,
+                            W_img,
+                            H_img,
+                        )
+                    kf_pos = result.get("lidar_kf_position_xy", None)
+                    if kf_pos is not None:
+                        kf_arr = np.array([[kf_pos[0], kf_pos[1]]])
+                        result["lidar_kf_uv"] = project_lidar_xy_to_uv(
+                            kf_arr,
+                            camera.R_CL,
+                            camera.t_CL,
+                            camera.fx,
+                            camera.fy,
+                            camera.cx,
+                            camera.cy,
+                            W_img,
+                            H_img,
+                        )
+            else:
+                # Skipped processing — reuse last result for display
+                if last_result is None:
+                    continue
+                result = last_result
 
             status = result.get("status", "INACTIVE")
 
@@ -2206,31 +2283,39 @@ def main() -> None:
                     approached = False
             mode_duration = current_time - mode_start_time
 
-            if result.get("timeout_inactive"):
-                approached = False
-                logger.info(
-                    f"Searching timeout - went inactive, saved_to_history={result.get('saved_to_history')}"
-                )
-
-            if not result.get("switch_active") and "success" in result:
-                if result.get("success"):
+            # One-time events: only process on fresh results
+            if should_process:
+                if result.get("bg_verify_result") == "in_history":
+                    approached = False
                     logger.info(
-                        f"Switch completed: new target track_id={result.get('track_id')}"
+                        "[BG-VERIFY] Person matched history → INACTIVE (skipped)"
                     )
-                    last_action = {
-                        "name": "switch_complete",
-                        "ok": True,
-                        "detail": f"track_id={result.get('track_id')}",
-                        "ts": current_time,
-                    }
-                elif result.get("reason"):
-                    logger.warning(f"Switch ended: {result.get('reason')}")
-                    last_action = {
-                        "name": "switch_complete",
-                        "ok": False,
-                        "detail": result.get("reason"),
-                        "ts": current_time,
-                    }
+
+                if result.get("timeout_inactive"):
+                    approached = False
+                    logger.info(
+                        f"Searching timeout - went inactive, saved_to_history={result.get('saved_to_history')}"
+                    )
+
+                if not result.get("switch_active") and "success" in result:
+                    if result.get("success"):
+                        logger.info(
+                            f"Switch completed: new target track_id={result.get('track_id')}"
+                        )
+                        last_action = {
+                            "name": "switch_complete",
+                            "ok": True,
+                            "detail": f"track_id={result.get('track_id')}",
+                            "ts": current_time,
+                        }
+                    elif result.get("reason"):
+                        logger.warning(f"Switch ended: {result.get('reason')}")
+                        last_action = {
+                            "name": "switch_complete",
+                            "ok": False,
+                            "detail": result.get("reason"),
+                            "ts": current_time,
+                        }
 
             is_tracked = bool(
                 result.get("target_found", False)
@@ -2238,7 +2323,7 @@ def main() -> None:
                 and result.get("distance") is not None
             )
 
-            tracking_source = result.get("tracking_source", "camera")
+            tracking_source = result.get("tracking_source", "none")
 
             x_offset, distance = 0.0, 0.0
             if is_tracked:
@@ -2249,39 +2334,34 @@ def main() -> None:
                             result["bbox"], distance, camera.fx, camera.cx
                         )
                     )
-                    # Approached check (greeting mode only affects visualization)
-                    if distance <= system.approach_distance:
-                        if not approached:
-                            logger.info(
-                                f"Person APPROACHED! Distance: {distance:.2f}m <= {system.approach_distance}m"
-                            )
-                        approached = True
+                    tracking_source = "camera"
+                    # Approached check: use system's internal state which is
+                    # gated on bg_verify completion (greeting mode)
+                    approached = system._target_approached
                 else:
                     is_tracked = False
 
-            # LiDAR fallback: target_found but no camera bbox
-            # OR: SEARCHING mode but LiDAR still has position
-            if (
-                not is_tracked
-                and result.get("target_found", False)
-                and tracking_source in ("lidar", "lidar_predict")
-            ):
-                lidar_pos = result.get("lidar_position")
-                if lidar_pos:
-                    distance = float(lidar_pos.get("z", 0))
-                    x_offset = float(lidar_pos.get("x", 0))
-                    if distance > 0.1:
-                        is_tracked = True
-
-            # SEARCHING mode with LiDAR position: publish position so
-            # robot keeps following while clothing/CLIP re-identifies
-            if not is_tracked and tracking_source == "lidar_searching":
-                lidar_pos = result.get("lidar_position")
-                if lidar_pos:
-                    distance = float(lidar_pos.get("z", 0))
-                    x_offset = float(lidar_pos.get("x", 0))
-                    if distance > 0.1:
-                        is_tracked = True
+            # LiDAR position fallback: use LiDAR position when camera has no bbox.
+            # This covers ALL LiDAR modes: "lidar", "lidar_predict", "lidar_searching"
+            if not is_tracked and result.get("lidar_position") is not None:
+                lidar_pos = result["lidar_position"]
+                lz = float(lidar_pos.get("z", 0))  # forward distance (positive)
+                lx = float(lidar_pos.get("x", 0))  # lateral offset
+                lidar_euc = float(lidar_pos.get("distance", 0))  # euclidean sanity
+                # Use z (forward distance) — should be positive after coord fix.
+                # Fall back to euclidean if z is somehow still negative.
+                ldist = lz if lz > 0.1 else lidar_euc
+                if ldist > 0.1:
+                    distance = ldist
+                    x_offset = lx
+                    is_tracked = True
+                    tracking_source = result.get("tracking_source", "lidar")
+                    if ros_node.publish_count % 15 == 0:
+                        logger.info(
+                            f"[LIDAR-PUB] {tracking_source}: "
+                            f"z={lz:.2f}m x={lx:+.2f}m "
+                            f"euc={lidar_euc:.2f}m (status={status})"
+                        )
 
             if auto_enroll and status == "INACTIVE":
                 try:
@@ -2302,6 +2382,7 @@ def main() -> None:
                     approached,
                     operation_mode=operation_mode,
                     num_persons=num_persons,
+                    tracking_source=tracking_source,
                 )
                 last_publish_time = current_time
 
@@ -2332,96 +2413,95 @@ def main() -> None:
 
                 if args.display and display is not None:
                     cv2.imshow("Person Following - ROS 2", display)
-                    key = cv2.waitKey(1) & 0xFF
-                    if key == ord("q"):
-                        stop_event.set()
-                    elif key == ord("e"):
-                        pending_enroll = True
-                        approached = False
-                    elif key == ord("c"):
-                        system.clear_target()
-                        approached = False
-                        last_action = {
-                            "name": "clear",
-                            "ok": True,
-                            "detail": "keyboard",
-                            "ts": time.time(),
-                        }
-                    elif key == ord("w"):
-                        # Switch (greeting mode only)
-                        if operation_mode == "greeting":
-                            try:
-                                switch_result = system.request_switch_target(
-                                    color_frame, depth_frame, aux
-                                )
-                                approached = False
-                                if switch_result.get("started"):
-                                    logger.info(
-                                        f"Switch started (keyboard): {switch_result.get('candidates_count')} candidates"
-                                    )
-                            except Exception as e:
-                                logger.error(f"Switch failed (keyboard): {e}")
-                        else:
-                            logger.warning("Switch not available in following mode")
-                    elif key == ord("g"):
-                        # Greeting ack (greeting mode only)
-                        if operation_mode == "greeting":
-                            try:
-                                result_ack = system.handle_greeting_acknowledged()
-                                approached = False
-                                logger.info(
-                                    f"Greeting acknowledged (keyboard): saved={result_ack['saved']}, history={result_ack['history_size']}"
-                                )
-                            except Exception as e:
-                                logger.error(f"Greeting ack failed (keyboard): {e}")
-                        else:
-                            logger.warning(
-                                "Greeting ack not available in following mode"
-                            )
-                    elif key == ord("h"):
-                        # Clear history (greeting mode only)
-                        if operation_mode == "greeting":
-                            system.clear_history()
-                            last_action = {
-                                "name": "clear_history",
-                                "ok": True,
-                                "detail": "keyboard",
-                                "ts": time.time(),
-                            }
-                        else:
-                            logger.warning(
-                                "Clear history not available in following mode"
-                            )
-                    elif key == ord("m"):
-                        # NEW: Toggle mode
-                        new_mode = (
-                            "following" if operation_mode == "greeting" else "greeting"
-                        )
-                        try:
-                            result_mode = system.set_operation_mode(new_mode)
-                            if result_mode["changed"]:
-                                operation_mode = new_mode
-                                shared_status.set_mode(new_mode)
-                                approached = False
-                                logger.info(
-                                    f"Mode toggled (keyboard): {result_mode['old_mode']} -> {result_mode['new_mode']}"
-                                )
-                        except Exception as e:
-                            logger.error(f"Mode toggle failed (keyboard): {e}")
-                    elif key == ord("s"):
-                        status_dict = system.get_status()
-                        logger.info("=" * 40)
-                        for k, v in status_dict.items():
-                            logger.info(f"  {k}: {v}")
-                        logger.info(f"  approached: {approached}")
-                        logger.info(f"  ROS publish count: {ros_node.publish_count}")
-                        logger.info(f"  HTTP: {cmd_url}")
-                        logger.info("=" * 40)
 
                 if ros_node.publish_count % 30 == 0 and is_tracked:
                     logger.info(
                         f"Target: x={x_offset:+.2f}m z={distance:.2f}m approached={approached}"
                     )
+
+            # Always poll keyboard to keep window responsive
+            if args.display:
+                key = cv2.waitKey(1) & 0xFF
+                if key == ord("q"):
+                    stop_event.set()
+                elif key == ord("e"):
+                    pending_enroll = True
+                    approached = False
+                elif key == ord("c"):
+                    system.clear_target()
+                    approached = False
+                    last_action = {
+                        "name": "clear",
+                        "ok": True,
+                        "detail": "keyboard",
+                        "ts": time.time(),
+                    }
+                elif key == ord("w"):
+                    # Switch (greeting mode only)
+                    if operation_mode == "greeting":
+                        try:
+                            switch_result = system.request_switch_target(
+                                color_frame, depth_frame, aux
+                            )
+                            approached = False
+                            if switch_result.get("started"):
+                                logger.info(
+                                    f"Switch started (keyboard): {switch_result.get('candidates_count')} candidates"
+                                )
+                        except Exception as e:
+                            logger.error(f"Switch failed (keyboard): {e}")
+                    else:
+                        logger.warning("Switch not available in following mode")
+                elif key == ord("g"):
+                    # Greeting ack (greeting mode only)
+                    if operation_mode == "greeting":
+                        try:
+                            result_ack = system.handle_greeting_acknowledged()
+                            approached = False
+                            logger.info(
+                                f"Greeting acknowledged (keyboard): saved={result_ack['saved']}, history={result_ack['history_size']}"
+                            )
+                        except Exception as e:
+                            logger.error(f"Greeting ack failed (keyboard): {e}")
+                    else:
+                        logger.warning("Greeting ack not available in following mode")
+                elif key == ord("h"):
+                    # Clear history (greeting mode only)
+                    if operation_mode == "greeting":
+                        system.clear_history()
+                        last_action = {
+                            "name": "clear_history",
+                            "ok": True,
+                            "detail": "keyboard",
+                            "ts": time.time(),
+                        }
+                    else:
+                        logger.warning("Clear history not available in following mode")
+                elif key == ord("m"):
+                    # Toggle mode
+                    new_mode = (
+                        "following" if operation_mode == "greeting" else "greeting"
+                    )
+                    try:
+                        result_mode = system.set_operation_mode(new_mode)
+                        if result_mode["changed"]:
+                            operation_mode = new_mode
+                            shared_status.set_mode(new_mode)
+                            approached = False
+                            logger.info(
+                                f"Mode toggled (keyboard): {result_mode['old_mode']} -> {result_mode['new_mode']}"
+                            )
+                    except Exception as e:
+                        logger.error(f"Mode toggle failed (keyboard): {e}")
+                elif key == ord("s"):
+                    status_dict = system.get_status()
+                    logger.info("=" * 40)
+                    for k, v in status_dict.items():
+                        logger.info(f"  {k}: {v}")
+                    logger.info(f"  approached: {approached}")
+                    logger.info(f"  ROS publish count: {ros_node.publish_count}")
+                    logger.info(f"  HTTP: {cmd_url}")
+                    logger.info("=" * 40)
 
             target_id = getattr(getattr(system, "target", None), "track_id", None)
             switch_info = (
@@ -2464,7 +2544,11 @@ def main() -> None:
 
             shared_status.set(status_data)
 
-            time.sleep(0.01)
+            # Yield CPU only when no work was done this iteration
+            if not should_process and (
+                current_time - last_publish_time < publish_period
+            ):
+                time.sleep(0.001)
 
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

@@ -753,9 +753,15 @@ class LidarTracker:
 
         The position uses the convention expected by the follower node:
         - x: lateral offset (positive = right in robot frame)
-          In LiDAR frame y is left, so x_publish = -y_lidar
-        - z: forward distance
-          In LiDAR frame x is forward, so z_publish = x_lidar
+        - z: forward distance (positive = in front of robot)
+
+        Coordinate mapping (LiDAR scanner is mounted 180° rotated):
+        - LiDAR x is backward → z_publish = -lx  (negate to get forward+)
+        - LiDAR y is right    → x_publish =  ly   (already right+)
+
+        Evidence from calibration:
+        - Person 1.7m ahead, 0.2m left → LiDAR KF = (-1.7, -0.2)
+        - Camera confirms: z≈1.7m, x≈-0.2m
 
         Returns
         -------
@@ -767,8 +773,8 @@ class LidarTracker:
             return None
         lx, ly = self._kf.pos
         return {
-            "x": -ly,  # lateral: LiDAR y (left+) → robot x (right+)
-            "z": lx,  # forward: LiDAR x → robot z
+            "x": ly,  # lateral: LiDAR y → robot x (right+)
+            "z": -lx,  # forward: LiDAR x is backward, negate for forward+
             "distance": self._kf.distance,
             "speed": self._kf.speed,
             "source": "lidar",
