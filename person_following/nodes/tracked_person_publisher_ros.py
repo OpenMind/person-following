@@ -84,8 +84,8 @@ def parse_args():
             "go2",
         ),
         "tron": (
-            f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_tron.yaml",
-            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron.yaml",
+            f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_tron_usb.yaml",
+            f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_tron_usb.yaml",
             "/image_raw",
             "go2",
         ),
