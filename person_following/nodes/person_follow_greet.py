@@ -1013,6 +1013,7 @@ class PersonFollower(Node):
             header=prepare_header(),
             request_id=ZenohString(data=request_id),
             status=HandshakeCode.APPROACHED,
+            message=ZenohString(data="Person approached successfully"),
         )
         self.zenoh_session.put("om/person_greeting", msg.serialize())
         time.sleep(0.1)
