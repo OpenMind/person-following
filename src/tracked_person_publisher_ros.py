@@ -88,8 +88,8 @@ def parse_args():
         "g1": (
             f"{INTRINSICS_CACHE_DIR}/camera_intrinsics_g1.yaml",
             f"{EXTRINSICS_CACHE_DIR}/lidar_camera_extrinsics_g1.yaml",
-            "/camera/insta360/image_raw",
-            "go2",
+            "rtsp://localhost:8554/top_camera_raw",  # default RTSP URL
+            "rtsp",
         ),
     }
 
@@ -200,8 +200,10 @@ def parse_args():
         "--camera-mode",
         type=str,
         default=camera_mode,
-        choices=["realsense", "go2"],
-        help="Camera mode. 'realsense' uses color+depth topics. 'go2' uses /camera/image_raw and /scan.",
+        choices=["realsense", "go2", "rtsp"],
+        help="Camera mode. 'realsense' uses color+depth topics. "
+        "'go2' uses ROS image topic + /scan. "
+        "'rtsp' uses RTSP stream + /scan.",
     )
 
     # Go2 front camera + LiDAR topics
@@ -216,6 +218,34 @@ def parse_args():
         type=str,
         default="/scan",
         help="LiDAR LaserScan topic",
+    )
+    p.add_argument(
+        "--rtsp-url",
+        type=str,
+        default=(
+            camera_topic
+            if camera_mode == "rtsp"
+            else "rtsp://localhost:8554/top_camera_raw"
+        ),
+        help="RTSP stream URL for --camera-mode rtsp (e.g. rtsp://192.168.123.164:8554/live)",
+    )
+    p.add_argument(
+        "--rtsp-fps",
+        type=int,
+        default=30,
+        help="Target FPS for RTSP capture (used in --camera-mode rtsp)",
+    )
+    p.add_argument(
+        "--rtsp-decode-format",
+        type=str,
+        default="H264",
+        help="RTSP decode fourcc format (used in --camera-mode rtsp)",
+    )
+    p.add_argument(
+        "--rtsp-reconnect-delay",
+        type=float,
+        default=1.0,
+        help="Seconds to wait before RTSP reconnection attempt (default: 1.0)",
     )
     p.add_argument(
         "--intrinsics-yaml",
@@ -911,6 +941,380 @@ class Go2ROSCameraLidar:
         """
         self._running = False
         logger.info("Go2ROSCameraLidar stopped")
+
+
+class Go2RTSPCameraLidar:
+    """Go2 camera via RTSP stream + LiDAR via ROS2 /scan with projection.
+
+    Replaces the previous ROS2 image topic subscription with a direct RTSP
+    capture thread (based on the Insta360 Stream bridge pattern). LiDAR
+    data is still received via ROS2 LaserScan subscription.
+    """
+
+    def __init__(
+        self,
+        node: Node,
+        rtsp_url: str,
+        rtsp_fps: int,
+        rtsp_decode_format: str,
+        rtsp_reconnect_delay: float,
+        scan_topic: str,
+        intrinsics_yaml: str,
+        tx: float,
+        ty: float,
+        tz: float,
+        rx: float,
+        ry: float,
+        rz: float,
+    ):
+        """
+        Initialize Go2 camera via RTSP with LiDAR interface.
+
+        Parameters
+        ----------
+        node : Node
+            ROS 2 node for creating LiDAR subscription.
+        rtsp_url : str
+            RTSP stream URL for the camera.
+        rtsp_fps : int
+            Target FPS for RTSP capture.
+        rtsp_decode_format : str
+            Fourcc decode format string (e.g. 'H264').
+        rtsp_reconnect_delay : float
+            Seconds to wait before reconnection attempts.
+        scan_topic : str
+            ROS2 topic for LiDAR LaserScan.
+        intrinsics_yaml : str
+            Path to camera intrinsics YAML.
+        tx, ty, tz : float
+            LiDAR-to-camera translation in meters.
+        rx, ry, rz : float
+            LiDAR-to-camera rotation (roll, pitch, yaw) in radians.
+        """
+        self.node = node
+        self.rtsp_url = rtsp_url
+        self.rtsp_fps = rtsp_fps
+        self.rtsp_decode_format = rtsp_decode_format
+        self.rtsp_reconnect_delay = rtsp_reconnect_delay
+
+        self._lock = threading.Lock()
+        self._color_frame: Optional[np.ndarray] = None
+        self._latest_scan: Optional[LaserScan] = None
+        self._scan_seq: int = 0
+        self._cached_aux: Optional[dict] = None
+        self._cached_scan_seq: int = -1
+
+        # Load camera intrinsics
+        fx, fy, cx, cy, w, h = load_intrinsics_yaml(intrinsics_yaml)
+        self._yaml_width = w
+        self._yaml_height = h
+        self.fx = fx
+        self.fy = fy
+        self.cx = cx
+        self.cy = cy
+        self.width = w
+        self.height = h
+
+        # LiDAR-to-camera extrinsics
+        self.R_CL = euler_xyz_to_R(rx, ry, rz)
+        self.t_CL = np.array([tx, ty, tz], dtype=np.float64).reshape(3, 1)
+
+        # --- RTSP capture setup ---
+        self._cap: Optional[cv2.VideoCapture] = None
+        self._capture_queue: queue.Queue = queue.Queue(maxsize=2)
+        self._running = True
+        self._intrinsics_scaled = False
+
+        self._initialize_capture()
+
+        # Start RTSP capture thread
+        self._capture_thread = threading.Thread(
+            target=self._capture_loop, daemon=True, name="rtsp-capture"
+        )
+        self._capture_thread.start()
+
+        # Start frame consumer thread (moves frames from queue to _color_frame)
+        self._consumer_thread = threading.Thread(
+            target=self._consumer_loop, daemon=True, name="rtsp-consumer"
+        )
+        self._consumer_thread.start()
+
+        # FPS tracking for RTSP stream
+        self._frame_count = 0
+        self._last_fps_time = time.time()
+
+        # --- LiDAR subscription via ROS2 ---
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
+        self._scan_sub = node.create_subscription(
+            LaserScan, scan_topic, self._scan_callback, qos
+        )
+
+        logger.info("Go2RTSPCameraLidar initialized:")
+        logger.info(f"  RTSP URL: {rtsp_url}")
+        logger.info(f"  RTSP FPS: {rtsp_fps}")
+        logger.info(f"  RTSP Decode: {rtsp_decode_format}")
+        logger.info(f"  LiDAR Scan: {scan_topic}")
+
+        self._wait_for_frames(timeout=10.0)
+
+    def _initialize_capture(self) -> bool:
+        """Initialize OpenCV VideoCapture for the RTSP stream."""
+        try:
+            self._cap = cv2.VideoCapture(self.rtsp_url)
+            if not self._cap.isOpened():
+                logger.error(f"Failed to open RTSP stream: {self.rtsp_url}")
+                return False
+
+            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            self._cap.set(cv2.CAP_PROP_FPS, self.rtsp_fps)
+            self._cap.set(
+                cv2.CAP_PROP_FOURCC,
+                cv2.VideoWriter_fourcc(*self.rtsp_decode_format),
+            )
+            self._cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 1000)
+            self._cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 100)
+
+            logger.info("Successfully connected to RTSP stream")
+            return True
+        except Exception as e:
+            logger.error(f"Error initializing RTSP capture: {e}")
+            return False
+
+    def _capture_loop(self):
+        """Dedicated thread for reading frames from RTSP stream."""
+        while self._running:
+            if self._cap is None or not self._cap.isOpened():
+                logger.warning("Attempting to reconnect to RTSP stream...")
+                self._initialize_capture()
+                time.sleep(self.rtsp_reconnect_delay)
+                continue
+
+            try:
+                ret, frame = self._cap.read()
+                if not ret:
+                    logger.warning(
+                        "Failed to capture RTSP frame, attempting reconnection..."
+                    )
+                    self._cap.release()
+                    self._initialize_capture()
+                    time.sleep(self.rtsp_reconnect_delay)
+                    continue
+
+                # Drop old frames if queue is full (keep latest only)
+                try:
+                    self._capture_queue.put_nowait(frame)
+                except queue.Full:
+                    try:
+                        self._capture_queue.get_nowait()
+                    except queue.Empty:
+                        pass
+                    try:
+                        self._capture_queue.put_nowait(frame)
+                    except queue.Full:
+                        pass
+
+                self._frame_count += 1
+
+            except Exception as e:
+                logger.error(f"RTSP capture error: {e}")
+                time.sleep(0.1)
+
+    def _consumer_loop(self):
+        """Consume frames from the capture queue and update _color_frame."""
+        while self._running:
+            try:
+                frame = self._capture_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+
+            try:
+                H, W = frame.shape[:2]
+
+                # Scale intrinsics once if actual frame size differs from YAML
+                if not self._intrinsics_scaled and (W, H) != (
+                    self._yaml_width,
+                    self._yaml_height,
+                ):
+                    sx = W / float(self._yaml_width) if self._yaml_width > 0 else 1.0
+                    sy = H / float(self._yaml_height) if self._yaml_height > 0 else 1.0
+                    self.fx *= sx
+                    self.fy *= sy
+                    self.cx *= sx
+                    self.cy *= sy
+                    self.width = W
+                    self.height = H
+                    self._intrinsics_scaled = True
+                    logger.info(
+                        f"Intrinsics scaled for RTSP frame size: {W}x{H} "
+                        f"(YAML was {self._yaml_width}x{self._yaml_height})"
+                    )
+                elif not self._intrinsics_scaled:
+                    self.width = W
+                    self.height = H
+                    self._intrinsics_scaled = True
+
+                with self._lock:
+                    self._color_frame = frame.copy()
+            except Exception as e:
+                logger.error(f"RTSP consumer error: {e}")
+
+    def _wait_for_frames(self, timeout: float):
+        """Wait for initial frames from RTSP stream."""
+        logger.info(f"Waiting for RTSP camera frames (timeout={timeout}s)...")
+        start_time = time.time()
+        while self._color_frame is None and (time.time() - start_time) < timeout:
+            time.sleep(0.05)
+        if self._color_frame is None:
+            logger.error("Timeout! No RTSP camera frames received.")
+        else:
+            logger.info(f"RTSP camera ready: {self.width}x{self.height}")
+
+    def _scan_callback(self, msg: LaserScan):
+        """Handle LiDAR scan messages."""
+        if not self._running:
+            return
+        with self._lock:
+            self._latest_scan = msg
+            self._scan_seq += 1
+
+    def _project_scan(
+        self, scan: LaserScan, frame_shape: Tuple[int, int]
+    ) -> Optional[dict]:
+        """
+        Project LiDAR scan points onto camera image plane.
+
+        Returns
+        -------
+        dict or None
+            Projection data with 'lidar_uv', 'lidar_ranges', 'lidar_scan_idx',
+            'uv', 'idx', 'r', 'xy', 'scan_xy', or None if projection fails.
+        """
+        H, W = frame_shape
+        ranges_full = np.array(scan.ranges, dtype=np.float64)
+        n = len(ranges_full)
+        if n == 0:
+            return None
+        angles = scan.angle_min + np.arange(n, dtype=np.float64) * scan.angle_increment
+        valid = (
+            np.isfinite(ranges_full)
+            & (ranges_full > float(scan.range_min))
+            & (ranges_full < float(scan.range_max))
+        )
+        if not np.any(valid):
+            return None
+        idx = np.where(valid)[0].astype(np.int32)
+        r = ranges_full[idx]
+        a = angles[idx]
+        x_lidar = r * np.cos(a)
+        y_lidar = r * np.sin(a)
+        z_lidar = np.zeros_like(x_lidar)
+        P_L = np.vstack([x_lidar, y_lidar, z_lidar])
+        P_C = self.R_CL.T @ (P_L - self.t_CL)
+        pts_cv = np.vstack([-P_C[1, :], -P_C[2, :], P_C[0, :]])
+        Z = pts_cv[2, :]
+        ok = Z > 0.01
+        if not np.any(ok):
+            return None
+        pts = pts_cv[:, ok]
+        idx_ok = idx[ok]
+        r_ok = r[ok]
+        x_ok = x_lidar[ok]
+        y_ok = y_lidar[ok]
+        K = np.array(
+            [[self.fx, 0, self.cx], [0, self.fy, self.cy], [0, 0, 1]], dtype=np.float64
+        )
+        uvw = K @ pts
+        uv = (uvw[:2, :] / uvw[2:3, :]).T
+        uv_int = np.round(uv).astype(np.int32)
+        in_img = (
+            (uv_int[:, 0] >= 0)
+            & (uv_int[:, 0] < W)
+            & (uv_int[:, 1] >= 0)
+            & (uv_int[:, 1] < H)
+        )
+        if not np.any(in_img):
+            return None
+        uv_final = uv_int[in_img]
+        idx_final = idx_ok[in_img]
+        r_final = r_ok[in_img]
+        xy_final = np.column_stack([x_ok[in_img], y_ok[in_img]])
+        # scan_xy = ALL valid XY points (not just in-image), for KF tracker
+        all_xy = np.column_stack([x_lidar, y_lidar])
+        return {
+            # Original keys (used by draw_visualization, _get_distance_from_lidar)
+            "lidar_uv": uv_final,
+            "lidar_scan_idx": idx_final,
+            "lidar_ranges": r_final,
+            # Keys expected by lidar_tracker.py cluster_in_bbox()
+            "uv": uv_final,
+            "idx": idx_final,
+            "r": r_final,
+            "xy": xy_final,
+            # All LiDAR XY for KF tracker (not just in-image)
+            "scan_xy": all_xy,
+        }
+
+    def get_frames(
+        self,
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], Optional[dict]]:
+        """
+        Get latest camera frame and LiDAR projection.
+
+        Returns
+        -------
+        color : np.ndarray or None
+            BGR color image from RTSP stream.
+        depth : None
+            Always None (no depth camera).
+        aux : dict or None
+            Auxiliary data with LiDAR projection and scan_xy for KF tracker.
+        """
+        with self._lock:
+            if self._color_frame is None:
+                return None, None, None
+            frame = self._color_frame.copy()
+            scan = self._latest_scan
+            scan_seq = self._scan_seq
+
+        # Cache scan projection — only recompute when scan changes
+        if scan is not None:
+            if scan_seq != self._cached_scan_seq:
+                self._cached_aux = self._project_scan(scan, frame.shape[:2])
+                self._cached_scan_seq = scan_seq
+            aux = self._cached_aux
+        else:
+            aux = None
+        return frame, None, aux
+
+    def get_rtsp_fps(self) -> float:
+        """Get the current RTSP capture FPS."""
+        current_time = time.time()
+        elapsed = current_time - self._last_fps_time
+        if elapsed > 0:
+            fps = self._frame_count / elapsed
+        else:
+            fps = 0.0
+        return fps
+
+    def reset_fps_counter(self):
+        """Reset the FPS counter."""
+        self._frame_count = 0
+        self._last_fps_time = time.time()
+
+    def stop(self):
+        """Stop RTSP capture and LiDAR, release resources."""
+        self._running = False
+        if self._capture_thread is not None and self._capture_thread.is_alive():
+            self._capture_thread.join(timeout=2.0)
+        if self._consumer_thread is not None and self._consumer_thread.is_alive():
+            self._consumer_thread.join(timeout=2.0)
+        if self._cap is not None:
+            self._cap.release()
+        logger.info("Go2RTSPCameraLidar stopped")
 
 
 # ROS 2 Publisher Node
@@ -1776,7 +2180,7 @@ def main() -> None:
     logger.info("ROS 2 node initialized")
 
     # Initialize camera
-    logger.info("Initializing camera via ROS topics...")
+    logger.info("Initializing camera...")
     if args.camera_mode == "realsense":
         camera = RealSenseROSCamera(
             node=ros_node,
@@ -1785,8 +2189,32 @@ def main() -> None:
             camera_info_topic=args.camera_info_topic,
             depth_scale=args.depth_scale,
         )
+    elif args.camera_mode == "rtsp":
+        # RTSP camera + ROS LiDAR
+        logger.info(f"Loading camera extrinsics from {args.extrinsics_yaml}...")
+        tx, ty, tz, rx, ry, rz = load_extrinsics_yaml(args.extrinsics_yaml)
+        logger.info(
+            f"Loaded extrinsics: tx={tx:.4f}, ty={ty:.4f}, tz={tz:.4f}, "
+            f"rx={rx:.4f}, ry={ry:.4f}, rz={rz:.4f}"
+        )
+
+        camera = Go2RTSPCameraLidar(
+            node=ros_node,
+            rtsp_url=args.rtsp_url,
+            rtsp_fps=args.rtsp_fps,
+            rtsp_decode_format=args.rtsp_decode_format,
+            rtsp_reconnect_delay=args.rtsp_reconnect_delay,
+            scan_topic=args.scan_topic,
+            intrinsics_yaml=args.intrinsics_yaml,
+            tx=tx,
+            ty=ty,
+            tz=tz,
+            rx=rx,
+            ry=ry,
+            rz=rz,
+        )
     else:
-        # Load extrinsics from YAML file
+        # go2 mode: ROS image topic + ROS LiDAR
         logger.info(f"Loading camera extrinsics from {args.extrinsics_yaml}...")
         tx, ty, tz, rx, ry, rz = load_extrinsics_yaml(args.extrinsics_yaml)
         logger.info(
@@ -1831,8 +2259,8 @@ def main() -> None:
         search_interval=args.search_interval,
         lidar_cluster_range_jump=args.lidar_range_jump,
         lidar_cluster_min_size=args.lidar_min_cluster_size,
-        # LiDAR KF tracker — enabled for go2 camera mode
-        use_lidar_tracker=(args.camera_mode == "go2"),
+        # LiDAR KF tracker — enabled for go2 and rtsp camera modes
+        use_lidar_tracker=(args.camera_mode in ("go2", "rtsp")),
         # History options
         max_history_size=args.max_history_size,
         history_file=args.history_file,
