@@ -80,7 +80,10 @@ WORKDIR ${PROJECT_ROOT}
 COPY pyproject.toml uv.lock ./
 
 RUN uv venv "${VIRTUAL_ENV}" --python python3 --system-site-packages && \
-    uv sync --locked --no-install-project --all-extras
+    uv sync --locked --no-install-project --all-extras && \
+    rm -rf ${VIRTUAL_ENV}/lib/python3.12/site-packages/torch* \
+           ${VIRTUAL_ENV}/lib/python3.12/site-packages/torchvision* \
+           ${VIRTUAL_ENV}/lib/python3.12/site-packages/torchaudio*
 
 COPY . ${PROJECT_ROOT}
 

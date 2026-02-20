@@ -188,7 +188,7 @@ class MotionController:
         angle_deg = math.degrees(angle)
 
         # Skip obstacle avoidance if close to person
-        close_to_person = distance < (self.target_distance + 0.7)
+        close_to_person = distance < (self.target_distance + 0.85)
         if close_to_person:
             path_safe = True
             alternative_angle = None
